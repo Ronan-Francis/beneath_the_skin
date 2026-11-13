@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#120609">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Beneath the Skin</title>
+<meta name="description" content="Something lives beneath the world. They call it the Shift. A procedurally generated pixel-art horror hunt for your browser and phone.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Beneath the Skin">
+<meta property="og:description" content="Something lives beneath the world. They call it the Shift. Find the old stairs. Go down. Kill it.">
+<meta property="og:url" content="https://ronan-francis.github.io/beneath_the_skin/">
+<meta property="og:image" content="https://ronan-francis.github.io/beneath_the_skin/preview.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@400;600&display=swap" rel="stylesheet">
+<script>
+  // ===== Release version =====
+  // Bump VERSION every time you push changes. Every file URL gets ?v=VERSION, so players'
+  // browsers (and the offline cache) fetch the whole new set together instead of mixing
+  // old and new files. If you add a new file to js/, add its name to GAME_MODULES too.
+  var VERSION = '1';
+  var GAME_MODULES = ['core', 'difficulty', 'noise', 'art', 'entities', 'gen_overworld', 'gen_maze',
+    'gen_flesh', 'gen_house', 'shift', 'guide', 'worldchecks', 'audio', 'weapons', 'game'];
+  (function () {
+    var map = { imports: {} };
+    GAME_MODULES.forEach(function (m) { map.imports['./js/' + m + '.js'] = './js/' + m + '.js?v=' + VERSION; });
+    document.write('<script type="importmap">' + JSON.stringify(map) + '<\/script>');
+    document.write('<link rel="stylesheet" href="css/style.css?v=' + VERSION + '">');
+  })();
+</script>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="title" class="overlay">
+  <h1>BENEATH<br>THE SKIN</h1>
+  <p class="sub">Something lives beneath the world. They call it the Shift.</p>
+  <button id="btnCont" class="primary">Continue</button>
+  <div id="diffRow" class="diffrow"><button data-d="easy">Easy</button><button data-d="medium">Medium</button><button data-d="hard">Hard</button><button data-d="impossible">Impossible</button></div>
+  <p id="diffBlurb" class="blurb"></p>
+  <button id="btnNew">New world</button>
+  <div class="seedrow">Seed <input id="seed" placeholder="random" autocomplete="off"></div>
+  <p class="hint">Left thumb: drag to move. Right side: attack and use.<br>Hold your phone sideways for the widest view. In Chrome, use ⋮ → Add to Home screen to play full screen.</p>
+  <div class="linkrow"><button id="btnTests" class="linkbtn">World tests</button><button id="btnClear" class="linkbtn">Clear all saves</button></div>
+</div>
+<div id="tests" class="overlay hidden">
+  <div class="filehead">WORLD TESTS</div>
+  <div class="wtprog"><div id="wtBar"></div></div>
+  <div id="wtStatus"></div>
+  <div id="wtSummary"></div>
+  <div class="wtbtns"><button id="wtRun" class="primary">Run 50 new worlds</button><button id="wtBack">Back</button></div>
+  <div id="wtFails" class="wtbox"></div>
+  <div id="wtList" class="wtbox"></div>
+</div>
+<div id="menu" class="overlay hidden">
+  <h2>Paused</h2>
+  <div id="menuSeed"></div>
+  <button id="btnResume" class="primary">Resume</button>
+  <button id="btnHelp">What do I do?</button>
+  <button id="btnFiles">Files</button>
+  <button id="btnDiff">Difficulty</button>
+  <button id="btnSound">Sound: on</button>
+  <button id="btnFull">Full screen</button>
+  <button id="btnNewConfirm">New world</button>
+</div>
+<div id="ending" class="overlay hidden">
+  <h2 id="endTitle" class="endh">The world goes still.</h2>
+  <p id="endSub" class="sub">No pulse in the ground. No warmth in the walls. For the first time, the world is only a world.</p>
+  <p id="endStats" class="stats"></p>
+  <button id="btnNGP" class="primary">Begin again</button>
+  <button id="btnStay">Stay a while</button>
+</div>
+<div id="files" class="overlay hidden">
+  <div class="filehead">RECOVERED FILES</div>
+  <div id="fileList" class="filelist"></div>
+  <div id="fileView" class="fileview hidden"><div id="fileTitle" class="filetitle"></div><div id="fileBody" class="filebody"></div></div>
+  <button id="btnFilesBack">Back</button>
+</div>
+<div id="guide" class="overlay hidden">
+  <div class="fileview">
+    <div id="guideTitle" class="filetitle">INSIDE THE SHIFT · WHAT TO DO</div>
+    <div id="guideBody" class="filebody"></div>
+  </div>
+  <button id="btnGuide" class="primary">Go</button>
+</div>
+<div id="intro" class="overlay hidden">
+  <div class="fileview">
+    <div class="filetitle">HUNTER'S NOTES · DAY 1</div>
+    <div class="filebody">
+      <p>You have hunted it across three islands. Always the same signs: warm ground, iron in the wells, towns that go quiet behind a wall of fog.</p>
+      <p>They call it <b>the Shift</b>. It lives beneath the world.</p>
+      <p>This time you got here before it woke. Find the old stairs. Go down. Kill it.</p>
+      <p class="kit">Carrying: a bat, a pistol with 24 rounds, one medkit. Search empty houses for more.</p>
+    </div>
+  </div>
+  <button id="btnIntro" class="primary">Begin the hunt</button>
+</div>
+<div id="loading" class="overlay hidden"><div id="loadingMsg">Growing the world...</div></div>
+<script type="module">import './js/game.js';</script>
+<script>
+  // ===== Offline play =====
+  // Registers sw.js and saves this version's files so the game runs with no connection.
+  // Off on localhost so your edits always show while developing; add ?sw to the URL to test it.
+  (function () {
+    var local = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
+    if (!('serviceWorker' in navigator) || (local && !/[?&]sw\b/.test(location.search))) return;
+    window.addEventListener('load', function () {
+      var urls = ['./', 'css/style.css?v=' + VERSION, 'manifest.webmanifest',
+        'icons/favicon-32.png', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png', 'icons/apple-touch-icon.png']
+        .concat(GAME_MODULES.map(function (m) { return 'js/' + m + '.js?v=' + VERSION; }));
+      navigator.serviceWorker.register('sw.js?v=' + VERSION)
+        .then(function () { return caches.open('bts-v' + VERSION); })
+        .then(function (c) { return c.addAll(urls.map(function (u) { return new Request(u, { cache: 'reload' }); })); })
+        .catch(function (e) { console.warn('Offline cache not ready:', e); });
+    });
+  })();
+</script>
+</body>
+</html>
