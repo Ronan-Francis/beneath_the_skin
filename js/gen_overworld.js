@@ -458,8 +458,14 @@ function buildRegions(L, R, seed, el) {
     const path = astar(L, ax, ay, bx, by, roadCost); if (path) layRoad(L, path);
   }
   // ---- spawn in a village near the middle ----
+  // prefer a start village with a spot for the first stairs 2-3 hexes away, beside another village at most 2 hexes from you,
+  // so the first night always has a town to fall within reach
   const vill = towns.filter(t => t.kind === 'village');
-  const sp = (vill.length ? vill : towns).slice().sort((a, b) => dist(a.x, a.y, W / 2, H / 2) - dist(b.x, b.y, W / 2, H / 2))[0];
+  const byMid = (vill.length ? vill : towns).slice().sort((a, b) => dist(a.x, a.y, W / 2, H / 2) - dist(b.x, b.y, W / 2, H / 2));
+  const stairsOK = h => h.type === 'wild' && !h.seam && h.nb.filter(n => HX[n].type === 'wild').length >= 4 && h.land / h.n >= 0.6;
+  const hookOK = t => { const s0 = HX[t.hex]; return HX.some(h => stairsOK(h) && hexDist(h, s0) >= 2 && hexDist(h, s0) <= 3 && !s0.nb.includes(h.id) &&
+    h.nb.some(n => HX[n].type === 'town' && HX[n].style === 'village' && n !== s0.id && hexDist(HX[n], s0) <= 2)); };
+  const sp = byMid.slice(0, 12).find(hookOK) || byMid[0];
   const spHex = HX[sp.hex];
   const reach = new Uint8Array(N);
   { const st = nearestTile(L, sp.x, sp.y + 1, 4, (x, y) => !TP[L.get(x, y)].solid) || [sp.x, sp.y + 1]; const qq = [st[1] * W + st[0]]; reach[qq[0]] = 1;
@@ -476,13 +482,19 @@ function buildRegions(L, R, seed, el) {
   }
   dc.sort((a, b) => b.s - a.s);
   const dung = [];
-  const first = dc.filter(d => hexDist(d.h, spHex) <= 3).sort((a, b) => hexDist(a.h, spHex) - hexDist(b.h, spHex))[0];
-  if (first) dung.push(first);
+  // the first stairs sit beside a living town a short walk from the start: the town that walks into them on the first night
+  // (always a village: hamlets are too small to hold a crowd)
+  const fallNb = d => d.h.nb.map(n => HX[n]).filter(n => n.type === 'town' && n.style === 'village' && n.id !== spHex.id && hexDist(n, spHex) <= 2);
+  const fallScore = n => hexDist(n, spHex);
+  const near = dc.filter(d => hexDist(d.h, spHex) <= 3).sort((a, b) => (fallNb(a).length ? 0 : 10) + hexDist(a.h, spHex) - (fallNb(b).length ? 0 : 10) - hexDist(b.h, spHex));
+  const first = near[0];
+  let fallHex = null;
+  if (first) { dung.push(first); fallHex = fallNb(first).sort((a, b) => fallScore(a) - fallScore(b))[0] || null; }
   for (const d of dc) { if (dung.length >= 6) break; if (dung.every(o => hexDist(o.h, d.h) >= 4)) dung.push(d); }
   L.dungeons = dung.map((d, id) => { const r = placeDungeon(L, d.e[0], d.e[1], seed + id * 7); d.h.dungeon = true; return { x: d.e[0], y: d.e[1], id, seen: false, hex: d.h.id, hex0: d.h.id, under: r.under, light: r.light, home: [d.e[0], d.e[1]] }; });
   // ---- quarantine: towns around a dungeon lose their people to the fog ----
   for (const d of dung) for (const n of d.h.nb) {
-    const nh = HX[n]; if (nh.type !== 'town') continue;
+    const nh = HX[n]; if (nh.type !== 'town' || nh === fallHex) continue;
     nh.fogTown = true; const s = towns[nh.settle]; if (!s.fog) { s.fog = true; addQuarantine(L, s, R); }
   }
   computeFog(L);
@@ -494,6 +506,7 @@ function buildRegions(L, R, seed, el) {
   for (let i = 0; i < N; i++) if (townMap[i] && !towns[townMap[i] - 1].fog) L.noEnemy[i] = 1;
   L.towns = towns; L.townMap = townMap;
   L.spawnTown = sp.idx;
+  L.fallTown = fallHex ? fallHex.settle : -1;
   L.spawn = { x: sp.x * TS + 8, y: (sp.y + 1) * TS + 8 };
   const st = { land: landH.length, wild: HX.filter(h => h.type === 'wild').length, town: HX.filter(h => h.type === 'town').length, city: cities.length, village: towns.filter(t => t.kind === 'village').length, hamlet: towns.filter(t => t.kind === 'hamlet').length, fogTowns: towns.filter(t => t.fog).length, dungeons: dung.length };
   L.hexStats = st;

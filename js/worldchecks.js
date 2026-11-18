@@ -5,6 +5,7 @@ import {
 } from './gen_overworld.js';
 import { auResume } from './audio.js';
 import { $, freshProg, G, newGame, setupOverworld } from './game.js';
+import { descentProblems } from './gen_maze.js';
 
 // ================= world checks: do the biomes and the towns match up? =================
 // Each check returns { count, examples: [{ msg, x, y }] }. A world passes a check when count is 0.
@@ -101,9 +102,9 @@ const WORLD_CHECKS = [
     if (ds.length < 6) r.add(`Only ${ds.length} sets of stairs`, 0, 0);
     for (let a = 0; a < ds.length; a++) for (let b = a + 1; b < ds.length; b++) if (hexDist(L.hexes[ds[a].hex], L.hexes[ds[b].hex]) < 4) r.add('Two sets of stairs are too close', ds[b].x, ds[b].y);
     return r; } },
-  { group: 'Hex rules', id: 'fog-rule', name: 'Fog towns are exactly the towns next to stairs', run(L) {
+  { group: 'Hex rules', id: 'fog-rule', name: 'Fog towns are exactly the towns next to stairs (except the first-night town)', run(L) {
     const r = wcResult(), shouldFog = new Set();
-    for (const d of L.dungeons) for (const n of L.hexes[d.hex].nb) if (L.hexes[n].type === 'town') shouldFog.add(L.hexes[n].settle);
+    for (const d of L.dungeons) for (const n of L.hexes[d.hex].nb) if (L.hexes[n].type === 'town' && L.hexes[n].settle !== L.fallTown) shouldFog.add(L.hexes[n].settle);
     for (const t of L.towns) { const want = shouldFog.has(t.idx); if (!!t.fog !== want) r.add(`${t.name} ${t.fog ? 'is foggy but no stairs are near' : 'borders stairs but has no fog'}`, t.x, t.y); }
     return r; } },
   { group: 'Hex rules', id: 'spawn-safe', name: 'You start in a living village away from the stairs', run(L) {
@@ -111,6 +112,22 @@ const WORLD_CHECKS = [
     if (t.kind !== 'village') r.add(`Start town is a ${t.kind}`, t.x, t.y);
     if (t.fog) r.add('Start town is quarantined', t.x, t.y);
     for (const d of L.dungeons) if (hexDist(L.hexes[d.hex], L.hexes[t.hex]) < 2) r.add('Stairs right next to the start town', d.x, d.y);
+    return r; } },
+  { group: 'Hex rules', id: 'first-night', name: 'A living village near the start borders the first stairs (it falls on night one)', run(L) {
+    const r = wcResult(), sp = L.towns[L.spawnTown], t = L.towns[L.fallTown];
+    if (!t) { r.add('No first-night town', sp.x, sp.y); return r; }
+    if (t === sp) r.add('The first-night town is the start town', t.x, t.y);
+    if (t.fog) r.add(`${t.name} starts in fog`, t.x, t.y);
+    if (t.kind !== 'village') r.add(`${t.name} is a ${t.kind}, not a village`, t.x, t.y);
+    const th = L.hexes[t.hex];
+    if (hexDist(th, L.hexes[sp.hex]) > 2) r.add(`${t.name} is more than 2 hexes from the start`, t.x, t.y);
+    if (!L.dungeons.some(d => hexDist(L.hexes[d.hex], th) === 1)) r.add(`${t.name} doesn't border any stairs`, t.x, t.y);
+    if (!L.ents.some(e => e.type === 'npc' && e.town === t)) r.add(`Nobody lives in ${t.name}`, t.x, t.y);
+    return r; } },
+  // ---------------- the descent ----------------
+  { group: 'The descent', id: 'descent', name: 'Every floor below the first stairs can be walked, even while the breach walls move', run(L) {
+    const r = wcResult(), sp = L.towns[L.spawnTown];
+    for (const msg of descentProblems(G.seed)) r.add(msg, sp.x, sp.y);
     return r; } },
   // ---------------- biomes make sense ----------------
   { group: 'Biomes make sense', id: 'snow-high', name: 'Snow never touches beach, swamp or water', run(L) {

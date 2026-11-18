@@ -1,22 +1,26 @@
 import { dist, smooth, T, TAU, TP, TS } from './core.js';
 import { DIFF } from './difficulty.js';
-import { DX8, DY8, moveBody } from './entities.js';
+import { DX8, DY8, makeEnemy, moveBody } from './entities.js';
 import { computeFog, DX4, DY4, hexDist, isGround } from './gen_overworld.js';
 import { sfx } from './audio.js';
-import { bctx, BH, burst, BW, G, paintSeen, saveGame, toast } from './game.js';
+import { bctx, BH, burst, BW, G, paintSeen, saveGame, toast, wdist, wdx, wdy } from './game.js';
 
 // ================= the Shift stalks the surface at night =================
 export function nightRaw() { const l = 0.5 - 0.5 * Math.cos(G.day * TAU); return 1 - smooth(0.22, 0.5, l); }
 export function shiftTick(dt) {
   const L = G.over; if (!L || !L.dungeons || G.prog.won) return;
+  runFallFx();
   const nr = nightRaw();
-  if (nr > 0.55) G.wasNight = true;
+  if (nr > 0.55) { G.wasNight = true; G.fallWait = (G.fallWait || 0) + dt; }
   if (G.wasNight && nr < 0.3) { G.wasNight = false; dawnFog(L); }
-  if (nr <= 0.55) { for (const d of L.dungeons) d.crawling = false; return; }
+  // by day the stairs lie still and their glow sinks low; by night it swells and flickers
+  for (const d of L.dungeons) { d.light.r = 30 + 22 * nr; d.light.flick = 0.15 + 0.5 * nr; }
+  if (nr <= 0.55) { for (const d of L.dungeons) { d.crawling = false; d.climbT = CLIMB_FIRST; } return; }
   G.entT = (G.entT || 0) - dt;
   if (G.entT <= 0) { G.entT = 1; for (const d of L.dungeons) entrance(L, d); }
   if (G.L !== L || G.P.dead || G.fade) return; // the stairs only stalk you while you're out in the open
   const P = G.P, ptx = Math.floor(P.x / TS), pty = Math.floor(P.y / TS), ph = L.hexOf[pty * L.w + ptx];
+  for (const d of L.dungeons) climbOut(L, d, dt);
   if (ph < 0) return; const pH = L.hexes[ph];
   for (const d of L.dungeons) {
     d.crawling = hexDist(L.hexes[d.hex], pH) === 1;
@@ -71,9 +75,30 @@ function crawlStep(L, d, ptx, pty) {
   }
   if (best) moveDungeon(L, d, L.wrap ? L.wx(best[0]) : best[0], L.wrap ? L.wy(best[1]) : best[1], true);
 }
+// at night, things climb up out of the stairs: the same things that wait below.
+// Only while you're close enough to see it; the stairs themselves never hurt you.
+const CLIMB_FIRST = 14, CLIMB_NEAR = TS * 22, CLIMB_KINDS = ['husk', 'mite', 'worm'];
+function climbOut(L, d, dt) {
+  const sx = d.x * TS + 8, sy = d.y * TS + 8, dp = wdist(L, sx, sy, G.P.x, G.P.y);
+  if (dp > CLIMB_NEAR) return;
+  d.climbT = (d.climbT ?? CLIMB_FIRST) - dt; if (d.climbT > 0) return;
+  d.climbT = DIFF.climbEvery * (0.8 + Math.random() * 0.4);
+  const out = L.ents.filter(e => e.climbedFrom === d && !e.dead).length; if (out >= DIFF.climbMax) return;
+  // step off the stairs onto open ground beside them
+  for (let k = 0; k < 8; k++) {
+    const tx = d.x + DX8[(k + d.id) & 7], ty = d.y + DY8[(k + d.id) & 7]; if (L.blockedFor(tx, ty, true)) continue;
+    const pool = DIFF.id === 'easy' ? ['husk', 'mite'] : CLIMB_KINDS;
+    const e = makeEnemy(pool[Math.floor(Math.random() * pool.length)], tx * TS + 8, ty * TS + 8); e.climbedFrom = d;
+    L.ents.push(e); burst(sx, sy, [150, 30, 40], 10, 0.9);
+    if (dp < TS * 14) { sfx('squelch'); G.shake = Math.max(G.shake, 0.08); }
+    if (!G.climbWarned && dp < TS * 14) { G.climbWarned = true; toast('Something climbed out', '', 4); }
+    return;
+  }
+}
 export function moveDungeon(L, d, nx, ny, fx) {
   const W = L.w, oi = d.y * W + d.x, ni = ny * W + nx;
-  L.t[oi] = (isGround(d.under) || d.under === T.VEINS || d.under === T.TREE || d.under === T.PINE) ? T.VEINS : d.under;
+  // the stairs drag the old prison up behind them: cut stone where there was grass
+  L.t[oi] = (isGround(d.under) || d.under === T.VEINS || d.under === T.PSTONE || d.under === T.TREE || d.under === T.PINE) ? T.PSTONE : d.under;
   d.under = L.t[ni]; L.t[ni] = T.DUNGEON; d.x = nx; d.y = ny;
   d.light.x = nx * TS + 8; d.light.y = ny * TS + 8;
   for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
@@ -93,22 +118,48 @@ export function moveDungeon(L, d, nx, ny, fx) {
     }
   }
 }
-// towns bordering the stairs lose their people: eyes red, they walk down into the dark
+// towns bordering the stairs lose their people: they stop, their eyes go red, and one by one they walk down into the dark.
+// Nothing stops it. The first-night town waits until you're there to see it (or until the night is half gone).
+const FALL_SIGHT = TS * 13, FALL_LATE = 60;
+const FALL_FX = [];
+function later(s, fn) { FALL_FX.push({ at: G.t + s, fn }); }
+function runFallFx() {
+  for (let k = FALL_FX.length - 1; k >= 0; k--) if (G.t >= FALL_FX[k].at) { const f = FALL_FX[k]; FALL_FX.splice(k, 1); f.fn(); }
+}
+function fallReady(L, t) {
+  if (t.idx !== L.fallTown) return true;
+  if ((G.fallWait || 0) >= FALL_LATE) return true;
+  return G.L === L && !G.P.dead && wdist(L, t.x * TS + 8, t.y * TS + 8, G.P.x, G.P.y) < FALL_SIGHT;
+}
 function entrance(L, d) {
-  for (const n of L.hexes[d.hex].nb) {
-    const h = L.hexes[n]; if (h.type !== 'town') continue;
-    const t = L.towns[h.settle]; if (t.fog || t.doomed) continue;
+  const near = L.hexes[d.hex].nb.filter(n => L.hexes[n].type === 'town').map(n => L.towns[L.hexes[n].settle]);
+  // the first stairs always take the first-night town, even if they've crawled a hex away from it
+  if (d.id === 0 && L.towns[L.fallTown] && !near.includes(L.towns[L.fallTown])) near.push(L.towns[L.fallTown]);
+  for (const t of near) {
+    if (t.fog || t.doomed || !fallReady(L, t)) continue;
     t.doomed = true; G.prog.doomed[t.idx] = 1;
-    for (const e of L.ents) if (e.type === 'npc' && e.town === t) { e.entranced = d; e.idle = false; e.glow = 18; e.glowCol = [255, 30, 40]; }
-    for (const hs of t.houses) if (hs.light) hs.light.r = 0;
-    if (G.L === L && dist(t.x * TS, t.y * TS, G.P.x, G.P.y) < TS * 30) { toast(t.name, 'Their eyes are glowing red. They are walking out into the dark.', 5); sfx('entrance'); }
+    const sx = d.x * TS + 8, sy = d.y * TS + 8;
+    // nearest the stairs leaves first, so they walk out in a line
+    const folk = L.ents.filter(e => e.type === 'npc' && e.town === t).sort((a, b) => wdist(L, a.x, a.y, sx, sy) - wdist(L, b.x, b.y, sx, sy));
+    folk.forEach((e, k) => { e.entranced = d; e.idle = false; e.glow = 18; e.glowCol = [255, 30, 40]; e.entWait = 1.6 + k * 1.1; });
+    if (G.dialog && folk.includes(G.dialog.npc)) G.dialog = null;
+    // the lamps go out house by house
+    t.houses.filter(hs => hs.light).forEach((hs, k) => later(1.2 + k * 1.3, () => { hs.light.r = 0; }));
+    if (G.L === L && wdist(L, t.x * TS + 8, t.y * TS + 8, G.P.x, G.P.y) < TS * 30) { toast(t.name, '', 5); sfx('entrance'); }
     saveGame();
   }
 }
 export function updEntranced(n, dt, L) {
   const d = n.entranced, tx = d.x * TS + 8, ty = d.y * TS + 8, dx = tx - n.x, dy = ty - n.y, l = Math.hypot(dx, dy) || 1;
+  // first they stop where they are and stare at you, red-eyed; then they turn and go
+  if (n.entWait > 0) {
+    n.entWait -= dt; n.moving = false;
+    const px = wdx(L, G.P.x - n.x), py = wdy(L, G.P.y - n.y);
+    n.dir = Math.abs(px) > Math.abs(py) ? (px < 0 ? 2 : 3) : (py < 0 ? 1 : 0);
+    return;
+  }
   n.anim += dt; n.moving = true;
-  if (l < 10) { n.dead = true; burst(n.x, n.y, [200, 30, 40], 10); if (dist(n.x, n.y, G.P.x, G.P.y) < TS * 12) sfx('squelch'); return; }
+  if (l < 10) { n.dead = true; burst(n.x, n.y, [200, 30, 40], 10); if (wdist(G.L, n.x, n.y, G.P.x, G.P.y) < TS * 12) sfx('squelch'); return; }
   let mx = dx / l, my = dy / l;
   if (n.bumpT > 0) { n.bumpT -= dt; mx = Math.cos(n.wdir); my = Math.sin(n.wdir); }
   moveBody(n, mx * 26 * dt, my * 26 * dt, L, false);

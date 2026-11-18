@@ -1,5 +1,5 @@
 import { dist, TS } from './core.js';
-import { DIFF, floorsN } from './difficulty.js';
+import { DIFF, firstNightTown, floorsN } from './difficulty.js';
 import { gangliaLeft } from './gen_flesh.js';
 import { $, ctx, DPR, G, SCALE, SH, SW, toast, txt, UI } from './game.js';
 
@@ -11,8 +11,9 @@ export function goalText() {
     const total = L.ganglia.filter(g => g.idx < DIFF.nerves).length, left = gangliaLeft(L);
     return left ? `Goal: sever the nerves  ${total - left}/${total}` : 'Goal: destroy the heart';
   }
-  if (L.kind === 'maze') return L.depth >= floorsN() ? 'Goal: find the way into the Shift (red glow)' : 'Goal: find the stairs down (red glow)';
+  if (L.kind === 'maze') return L.depth >= floorsN() ? 'Goal: find the way into the Shift (red glow)' : L.stage === 'gradient' ? 'Goal: go in, and find the stairs down (red glow)' : 'Goal: find the stairs down (red glow)';
   if (L.kind === 'house') return 'Search the cupboards. Leave by the mat.';
+  const ft = firstNightTown(); if (ft) return `Goal: check on ${ft.name}`;
   const known = L.dungeons.some(d => d.seen);
   return known ? 'Goal: go down the old stairs (red on map)' : 'Goal: find the old stairs. Ask villagers.';
 }
@@ -53,22 +54,51 @@ export function showFleshGuide() {
     <p class="kit">When you hurt it, white cells come hunting. Keep moving and they lose you. The mouth you came in by takes you back up. Your goal is always shown under the place name.</p>`;
   G.paused = true; $('guide').classList.remove('hidden');
 }
-export function showHelp() {
-  $('menu').classList.add('hidden');
-  if (G.L.kind === 'flesh') { showFleshGuide(); $('guideTitle').textContent = 'INSIDE THE SHIFT · WHAT TO DO'; return; }
-  $('guideTitle').textContent = 'WHAT TO DO';
-  $('guideBody').innerHTML = `
-    <p><b>On the surface:</b> villagers tell you which way the old stairs are. Once enough of them have said it, the stairs appear on your map as a red dot. A red arrow points the way after each hint.</p>
-    <p><b>Supplies:</b> walk into empty houses and search the cupboards for guns, ammo and medkits. Lived-in houses stay locked. Healers in towns fix you up for free.</p>
-    <p><b>The mazes:</b> follow the red glow to the stairs down. The last floor leads into the Shift.</p>
-    <p><b>Inside the Shift:</b> sever the purple nerves, then destroy the heart.</p>
-    <p class="kit">Right now: ${goalText()}</p>`;
-  G.paused = true; $('guide').classList.remove('hidden');
-}
 let HEART_WARN_T = 0;
 export function fleshNudges(L, dt) {
   // if you walk up to a shielded heart, say why it won't die
   HEART_WARN_T -= dt;
   const h = L.heart, P = G.P; if (!h || h.dead || G.prog.won || HEART_WARN_T > 0) return;
   if (gangliaLeft(L) && dist(h.x, h.y, P.x, P.y) < TS * 9) { HEART_WARN_T = 20; toast('The heart is shielded', `${gangliaLeft(L)} ${gangliaLeft(L) === 1 ? 'nerve still feeds' : 'nerves still feed'} it. Follow the purple arrow.`, 4.5); }
+}
+
+// ================= how to play =================
+// from: 'title' or 'menu', so Back returns to the right place
+export function showHowTo(from) {
+  const now = G.running && G.L ? `<p class="now"><b>Right now:</b> ${goalText().replace(/^Goal: /, '')}</p>` : '';
+  $('howtoBody').innerHTML = `${now}
+    <h3>Controls</h3>
+    <table class="ctl">
+      <tr><th></th><th>Touch</th><th>Keyboard</th></tr>
+      <tr><td>Walk</td><td>Drag anywhere on the left half</td><td>WASD / arrows</td></tr>
+      <tr><td>Shoot</td><td>Crosshair button, or tap the right half</td><td>Space</td></tr>
+      <tr><td>Use</td><td>Round button above the crosshair</td><td>E</td></tr>
+      <tr><td>Swap weapon</td><td>Weapon panel</td><td>Q</td></tr>
+      <tr><td>Reload</td><td>Automatic when empty</td><td>R</td></tr>
+      <tr><td>Medkit</td><td>Red cross button</td><td>H</td></tr>
+      <tr><td>Map</td><td>Map button, top right</td><td>M</td></tr>
+      <tr><td>Pause</td><td>Pause button, top right</td><td>Esc / P</td></tr>
+    </table>
+    <p class="kit">Guns aim at the nearest enemy for you. The Use button changes to whatever is next to you: Talk, Enter, Search, Descend, Climb.</p>
+    <h3>The hunt</h3>
+    <ul>
+      <li><b>Find the old stairs.</b> Talk to villagers. Each one points the way, and once enough have, the stairs show on your map as a red dot.</li>
+      <li><b>Stock up.</b> Empty houses can be entered. Search their cupboards and any bodies for guns, ammo and medkits. Anything that sparkles can be used.</li>
+      <li><b>Go down.</b> In the mazes, follow the red glow to the stairs down. The last floor leads into the Shift.</li>
+      <li><b>Kill it.</b> Inside the Shift, sever the purple nerves, then destroy the heart.</li>
+    </ul>
+    <h3>Staying alive</h3>
+    <ul>
+      <li>Towns are safe: nothing follows you in. Healers fix you up for free.</li>
+      <li>Night brings more enemies, and wolves. Grey fog towns are quarantined: dangerous, but well stocked.</li>
+      <li>Out of ammo? You switch to the bat, which never runs out. Cupboards restock every day.</li>
+      <li>If you fall, you wake in the last town you visited${DIFF.perma ? '. Not on Impossible' : ''}.</li>
+    </ul>`;
+  $('howto').dataset.from = from;
+  $('menu').classList.add('hidden'); $('title').classList.add('hidden');
+  $('howto').classList.remove('hidden'); $('howto').scrollTop = 0;
+}
+export function closeHowTo() {
+  $('howto').classList.add('hidden');
+  $($('howto').dataset.from === 'menu' ? 'menu' : 'title').classList.remove('hidden');
 }

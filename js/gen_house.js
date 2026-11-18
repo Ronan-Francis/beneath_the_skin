@@ -22,14 +22,14 @@ export function genHouse(h) {
   L.set(mx, H - 2, T.IMAT);
   // furniture against the back wall: a cold fireplace and cupboards to search
   const bedLeft = R() < 0.5, slots = [];
-  for (let x = 2; x <= W - 3; x++) if (Math.abs(x - mx) > 0 || W < 10) slots.push(x);
+  // the bed takes one back corner, so nothing else may go there (cupboards used to be dropped there, leaving some houses with none)
+  for (let x = 2; x <= W - 3; x++) if ((Math.abs(x - mx) > 0 || W < 10) && !(bedLeft ? x <= 2 : x >= W - 3)) slots.push(x);
   const takeSlot = () => { const k = Math.floor(R() * slots.length); const x = slots[k]; slots.splice(k, 1); for (const n of [x - 1, x + 1]) { const j = slots.indexOf(n); if (j >= 0) slots.splice(j, 1); } return x; };
   L.set(takeSlot(), 1, T.IFIRE);
   L.stashes = new Map();
   const nCup = W >= 11 ? 3 : 2;
   for (let k = 0; k < nCup && slots.length; k++) {
     const x = takeSlot(); if (x === undefined) break;
-    if ((bedLeft && x <= 2) || (!bedLeft && x >= W - 3)) continue;
     L.set(x, 1, T.ISHELF); L.stashes.set(x + ',1', { type: 'stash', key: `${h.key}:${x}`, town: h.town });
   }
   const bx = bedLeft ? 1 : W - 2;

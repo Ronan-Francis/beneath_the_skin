@@ -1,24 +1,25 @@
 import { clamp, dist, hash2, lerp, mulberry32, pick, smooth, T, TAU, TP, TS } from './core.js';
-import { DIFF, DIFFS, drawHintArrow, setDifficulty, stairsHint } from './difficulty.js';
+import { DIFF, DIFFS, drawHintArrow, fallHint, floorsN, setDifficulty, stairsHint } from './difficulty.js';
 import { buildAtlas, buildSprites, FR, mixc, rgb, shd, SPR, SPRC, SPRW } from './art.js';
 import {
   collides, FLOW, flowDir, LINES_CALM, LINES_DEEP, LINES_HEALER, LINES_UNEASY, makeEnemy, makeNPC,
   moveBody, NPC_NAMES, updateFlow
 } from './entities.js';
 import { computeFog, fixCount, HEX_S, nearestTile } from './gen_overworld.js';
-import { enterDungeon, getLevel, growSurfaceVeins } from './gen_maze.js';
+import { enterDungeon, getLevel, growSurfaceVeins, hardAt, stageInfo } from './gen_maze.js';
 import { fleshAlarm } from './gen_flesh.js';
 import { enterHouse, houseOccupied, KNOCK_LINES } from './gen_house.js';
 import {
   drawRedEyes, findHaven, makeFogTown, moveDungeon, nightRaw, shiftTick, updEntranced
 } from './shift.js';
-import { drawObjective, goalText, showHelp } from './guide.js';
+import { closeHowTo, drawObjective, goalText, showHowTo } from './guide.js';
 import { makeWorld, setupWorldTests, townCentre } from './worldchecks.js';
 import { AU, auResume, auUpdate, sfx } from './audio.js';
 import {
-  AMMO_SHORT, ammoTypeFor, drawAim, drawBullet, drawGun, drawReticle, FILES, giveAmmo, gunOf, GUNS,
-  isEmpty, searchStash, startSearch, stashSearchable, updateGun, updateSearch, updBullet
+  AMMO_SHORT, ammoPop, ammoTypeFor, drawAim, drawBullet, drawGun, drawReticle, FILES, giveAmmo, gunOf, GUNS,
+  giveMed, isEmpty, MED_POP, popAll, searchStash, startSearch, stashSearchable, updateGun, updateSearch, updBullet
 } from './weapons.js';
+import { drawTip, noteUse, retireTip, tipsReset, tipsUpdate } from './tips.js';
 
 // ================= canvas & layout =================
 export const cv = document.getElementById('game'), ctx = cv.getContext('2d');
@@ -39,7 +40,6 @@ function resize() {
 function layoutUI() {
   const s = clamp(Math.min(SW, SH) / 400, 0.8, 1.35); UI.s = s;
   UI.atk = { x: SW - 74 * s, y: SH - 88 * s, r: 42 * s };
-  UI.pulse = { x: SW - 164 * s, y: SH - 56 * s, r: 28 * s };
   UI.med = { x: SW - 166 * s, y: SH - 52 * s, r: 25 * s };
   UI.gun = { x: SW - 252 * s, y: SH - 152 * s, w: 128 * s, h: 40 * s };
   UI.use = { x: SW - 86 * s, y: SH - 186 * s, r: 32 * s };
@@ -50,8 +50,10 @@ function layoutUI() {
 }
 
 // ================= input =================
-export const IN = { mx: 0, my: 0, atkHeld: false, atkPress: false, usePress: false, pulsePress: false, switchPress: false, reloadPress: false, medPress: false, keys: {} };
+export const IN = { mx: 0, my: 0, atkHeld: false, atkPress: false, usePress: false, switchPress: false, reloadPress: false, medPress: false, keys: {}, mode: 'touch' };
 const PTR = new Map(); let STICK = null;
+// let go of everything (stick, fire button, keys): used whenever a finger or key-up could have been missed
+export function resetInput() { STICK = null; PTR.clear(); IN.atkHeld = false; IN.keys = {}; IN.mx = IN.my = 0; }
 const inCircle = (b, x, y, pad = 1.15) => b && Math.hypot(x - b.x, y - b.y) < b.r * pad;
 function hitButton(x, y) {
   if (inCircle(UI.mapBtn, x, y, 1.4)) return 'map';
@@ -65,21 +67,24 @@ function hitButton(x, y) {
 function press(role) {
   if (role === 'atk') { IN.atkHeld = true; IN.atkPress = true; }
   else if (role === 'use') IN.usePress = true;
-  else if (role === 'pulse') IN.pulsePress = true;
   else if (role === 'gun') IN.switchPress = true;
   else if (role === 'med') IN.medPress = true;
-  else if (role === 'map') G.mapOpen = !G.mapOpen;
+  else if (role === 'map') toggleMap();
   else if (role === 'menu') openMenu();
 }
+function toggleMap() { G.mapOpen = !G.mapOpen; if (G.mapOpen) { resetInput(); G.mapSeen = true; } }
 cv.addEventListener('pointerdown', e => {
   e.preventDefault(); auResume();
+  IN.mode = e.pointerType === 'mouse' ? 'mouse' : 'touch';
   if (!G.running) return;
   const x = e.clientX, y = e.clientY;
   if (G.mapOpen) { G.mapOpen = false; return; }
   const hit = hitButton(x, y);
   if (hit) { PTR.set(e.pointerId, hit); press(hit); return; }
   if (G.dialog && y > G.dialogBox.y && y < G.dialogBox.y + G.dialogBox.h) { advanceDialog(); return; }
-  if (x < SW * 0.5 && !STICK) {
+  if (x < SW * 0.5) {
+    // the left half only ever moves: a new touch there always takes over the stick, even if an old one got stuck
+    if (STICK) PTR.delete(STICK.id);
     STICK = { id: e.pointerId, ox: x, oy: y, x, y }; PTR.set(e.pointerId, 'stick');
     try { cv.setPointerCapture(e.pointerId); } catch (_) {}
     return;
@@ -87,27 +92,32 @@ cv.addEventListener('pointerdown', e => {
   PTR.set(e.pointerId, 'atk'); press('atk');
 }, { passive: false });
 cv.addEventListener('pointermove', e => {
-  if (STICK && e.pointerId === STICK.id) {
-    STICK.x = e.clientX; STICK.y = e.clientY;
-    const dx = STICK.x - STICK.ox, dy = STICK.y - STICK.oy, l = Math.hypot(dx, dy), R = UI.stickR;
-    if (l > R * 1.25) { STICK.ox = STICK.x - dx / l * R * 1.25; STICK.oy = STICK.y - dy / l * R * 1.25; }
-  }
+  if (!STICK || e.pointerId !== STICK.id) return;
+  if (e.pointerType === 'mouse' && !(e.buttons & 1)) { ptrUp(e); return; }
+  STICK.x = e.clientX; STICK.y = e.clientY;
+  const dx = STICK.x - STICK.ox, dy = STICK.y - STICK.oy, l = Math.hypot(dx, dy), R = UI.stickR;
+  if (l > R * 1.25) { STICK.ox = STICK.x - dx / l * R * 1.25; STICK.oy = STICK.y - dy / l * R * 1.25; }
 });
 function ptrUp(e) {
   const role = PTR.get(e.pointerId); PTR.delete(e.pointerId);
   if (STICK && e.pointerId === STICK.id) STICK = null;
   if (role === 'atk' && ![...PTR.values()].includes('atk')) IN.atkHeld = false;
 }
-cv.addEventListener('pointerup', ptrUp); cv.addEventListener('pointercancel', ptrUp);
+// a finger can lift over a menu or off the canvas, so listen for it on the whole window
+window.addEventListener('pointerup', ptrUp, true); window.addEventListener('pointercancel', ptrUp, true);
+cv.addEventListener('lostpointercapture', e => { if (STICK && e.pointerId === STICK.id) ptrUp(e); });
+// safety net: with no fingers on the glass, nothing can still be held
+const noTouches = e => { if (e.touches.length === 0) { STICK = null; PTR.clear(); IN.atkHeld = false; } };
+window.addEventListener('touchend', noTouches, true); window.addEventListener('touchcancel', noTouches, true);
+window.addEventListener('blur', resetInput);
 cv.addEventListener('contextmenu', e => e.preventDefault());
 window.addEventListener('keydown', e => {
   if (e.repeat) return;
-  IN.keys[e.code] = true; auResume();
+  IN.keys[e.code] = true; auResume(); IN.mode = 'keys';
   if (!G.running) return;
   if (e.code === 'Space' || e.code === 'KeyJ') { IN.atkHeld = true; IN.atkPress = true; e.preventDefault(); }
   if (e.code === 'KeyE' || e.code === 'Enter') IN.usePress = true;
-  if (e.code === 'ShiftLeft' || e.code === 'ShiftRight' || e.code === 'KeyK') IN.pulsePress = true;
-  if (e.code === 'KeyM') G.mapOpen = !G.mapOpen;
+  if (e.code === 'KeyM') toggleMap();
   if (e.code === 'KeyQ') IN.switchPress = true;
   if (e.code === 'KeyR') IN.reloadPress = true;
   if (e.code === 'KeyH') IN.medPress = true;
@@ -117,8 +127,9 @@ window.addEventListener('keyup', e => { IN.keys[e.code] = false; if (e.code === 
 function readInput() {
   let mx = 0, my = 0;
   if (STICK) {
+    // small tilts creep, full tilt runs: past a 10% dead zone, speed follows a gentle curve
     const dx = STICK.x - STICK.ox, dy = STICK.y - STICK.oy, l = Math.hypot(dx, dy), R = UI.stickR;
-    if (l > R * 0.12) { const m = Math.min(1, l / R); mx = dx / l * m; my = dy / l * m; }
+    if (l > R * 0.1) { const t = clamp((l / R - 0.1) / 0.8, 0, 1), m = 0.18 + 0.82 * Math.pow(t, 1.4); mx = dx / l * m; my = dy / l * m; }
   }
   const K = IN.keys;
   const kx = (K.KeyD || K.ArrowRight ? 1 : 0) - (K.KeyA || K.ArrowLeft ? 1 : 0), ky = (K.KeyS || K.ArrowDown ? 1 : 0) - (K.KeyW || K.ArrowUp ? 1 : 0);
@@ -128,12 +139,14 @@ function readInput() {
 
 // ================= game state =================
 const DAY_LEN = 300;
+// every run starts late in the afternoon: dusk in about ten seconds, night in about thirty, so the first town falls in the first two minutes
+const START_DAY = 0.7;
 export const G = {
   ngp: 0, prog: { chests: {}, ganglia: {}, won: false, files: {}, houses: {}, searched: {}, doomed: {}, lost: {}, hints: {}, marked: {} }, diff: 'easy', permaDead: false, hintArrow: null, endMode: 'win', endT: 0, stillT: 0, kick: { x: 0, y: 0 }, flash: 0, dayN: 0, search: null, hittables: [],
   running: false, paused: false, seed: 0, t: 0, day: 0.3, L: null, over: null, levels: new Map(), P: null,
   cam: { x: 0, y: 0 }, parts: [], toasts: [], shake: 0, mapOpen: false, dialog: null, dialogBox: { y: 0, h: 0 },
   fade: null, beat: 9, hurtFlash: 0, stats: { kills: 0, time: 0, deaths: 0 }, lastTown: -1, curTown: 0,
-  maxDepth: 0, use: null, spawnT: 0, saveT: 0, hintT: 25, settings: { pulse: false },
+  maxDepth: 0, use: null, pops: [], spawnT: 0, saveT: 0, hintT: 25, settings: {},
 };
 // ---- the surface wraps: shortest offsets across the edge ----
 export function wdx(L, d) { if (!L.wrap) return d; const S = L.w * TS; return d - S * Math.round(d / S); }
@@ -142,8 +155,11 @@ export function wrapPos(L, e) { if (!L.wrap) return; const Wp = L.w * TS, Hp = L
 // where something should be drawn/aimed at: its copy nearest to the reference point
 export function nearX(L, x, ref) { return ref + wdx(L, x - ref); }
 export function nearY(L, y, ref) { return ref + wdy(L, y - ref); }
+// distance that takes the shortcut across the wrapping edge of the surface
+export function wdist(L, x1, y1, x2, y2) { return Math.hypot(wdx(L, x2 - x1), wdy(L, y2 - y1)); }
+const WALK = 88; // walking speed in pixels per second
 function makePlayer(x, y) {
-  return { type: 'player', x, y, r: 5, hp: DIFF.hearts, maxHp: DIFF.hearts, dmg: 1, fx: 0, fy: 1, dir: 0, anim: 0, moving: false, inv: 0, kx: 0, ky: 0, dead: false, pulse: 0, pulseCool: 0,
+  return { type: 'player', x, y, r: 5, vx: 0, vy: 0, hp: DIFF.hearts, maxHp: DIFF.hearts, dmg: 1, fx: 0, fy: 1, dir: 0, anim: 0, moving: false, inv: 0, kx: 0, ky: 0, dead: false,
     guns: [{ id: 'bat' }, { id: 'pistol', mag: 12 }], gi: 1, ammo: { light: DIFF.startAmmo, shell: 0, heavy: 0 }, meds: DIFF.meds, vessels: 0, fireCool: 0, bloom: 0, reload: 0, reloadMax: 1, aimT: 0, aimAng: 0, target: null };
 }
 function nightF() {
@@ -186,7 +202,8 @@ export function setupOverworld(L) {
     for (const h of town.houses) { h.town = town; h.key = h.door[0] + ',' + (h.door[1] - 1); L.doorMap.set(h.key, h); if (h.light && !houseOccupied(h)) h.light.r = 0; }
     (town.corpses || []).forEach((c, k) => { const e = makeCorpse(c.x, c.y); e.key = `o${town.idx}-${k}`; e.pool = 'surface'; L.ents.push(e); });
     if (town.fog) continue;
-    const n = town.kind === 'city' ? 7 + Math.floor(R() * 4) : town.kind === 'hamlet' ? (R() < 0.6 ? 1 : 0) : 2 + Math.floor(town.houses.length / 2);
+    let n = town.kind === 'city' ? 7 + Math.floor(R() * 4) : town.kind === 'hamlet' ? (R() < 0.6 ? 1 : 0) : 2 + Math.floor(town.houses.length / 2);
+    if (town.idx === L.fallTown) n = Math.max(n + 1, 4); // the town that falls on the first night needs a crowd to walk out
     for (let k = 0; k < n; k++) {
       for (let tries = 0; tries < 30; tries++) {
         const x = town.x + Math.round((R() - 0.5) * town.r * 1.6), y = town.y + Math.round((R() - 0.5) * town.r * 1.6);
@@ -214,8 +231,8 @@ export function newGame(seed, save, carry, diffId) {
   setDifficulty(save ? (save.diff || 'hard') : diffId || G.diff || 'easy');
   showLoading('Growing the world...');
   setTimeout(() => {
-    G.seed = seed >>> 0; G.levels.clear(); G.parts = []; G.toasts = []; G.dialog = null; G.fade = null; G.mapOpen = false;
-    G.stats = { kills: 0, time: 0, deaths: 0 }; G.maxDepth = 0; G.prog = freshProg(); G.dungeon = null; G.wasNight = false; G.crawlWarned = false; G.dayN = 0; G.search = null; G.lastTown = -1; G.curTown = 0; G.day = 0.3;
+    G.seed = seed >>> 0; G.levels.clear(); G.parts = []; G.toasts = []; G.pops = []; G.dialog = null; G.fade = null; G.mapOpen = false;
+    G.stats = { kills: 0, time: 0, deaths: 0 }; G.maxDepth = 0; G.prog = freshProg(); G.dungeon = null; G.wasNight = false; G.crawlWarned = false; G.dayN = 0; G.search = null; G.lastTown = -1; G.curTown = 0; G.day = START_DAY; G.fallWait = 0; G.breachWarned = false; G.climbWarned = false;
     if (save) save = migrateSave(save);
     const test = G.testJump; G.testJump = null; G.testWorld = !!test;
     // same seed, same world: checks run on start, and a world that still fails after its fixes quietly becomes the next variant
@@ -229,9 +246,11 @@ export function newGame(seed, save, carry, diffId) {
     if (save) { applySave(save, L); if (G.maxDepth) growSurfaceVeins(); }
     if (save && save.lastTown >= 0 && L.towns[save.lastTown]) [sx, sy] = townSpot(L, L.towns[save.lastTown]);
     if (save && save.loc) { try { lvl = getLevel(save.loc.key || 'over'); sx = save.loc.x; sy = save.loc.y; } catch (e) { lvl = L; } }
+    // a floor can be built differently than when you saved (or its walls have moved): never wake up inside a wall
+    if (lvl && lvl !== L && lvl.start && lvl.solid(Math.floor(sx / TS), Math.floor(sy / TS))) { sx = lvl.start.x; sy = lvl.start.y; }
     if (test) { const c = nearestTile(L, test.x, test.y, 12, (x, y) => !L.blockedFor(x, y)) || [test.x, test.y]; sx = c[0] * TS + 8; sy = c[1] * TS + 8; G.testMark = { x: test.x, y: test.y, t: 0 }; }
     else G.testMark = null;
-    enterLevel(lvl, sx, sy);
+    enterLevel(lvl, sx, sy); tipsReset();
     G.running = true; G.paused = false; hideAll();
     if (test) toast('Test world · not saved', test.msg, 7);
     else if (carry) toast(`New Game+ ${G.ngp}`, 'Another island. Another Shift. It already knows your name.');
@@ -241,7 +260,7 @@ export function newGame(seed, save, carry, diffId) {
   }, 40);
 }
 // saves made before the world started wrapping point at a different map: keep your kit and progress below, drop the old surface details
-const GEN_V = 2;
+const GEN_V = 3; // 3: the first stairs sit next to a living town, the one that falls on the first night
 function migrateSave(s) {
   if ((s.gen || 1) === GEN_V) return s;
   s = Object.assign({}, s, { gen: GEN_V, wv: null, seen: null, towns: null, dung: null, lastTown: -1 });
@@ -250,7 +269,7 @@ function migrateSave(s) {
   return s;
 }
 export function enterLevel(L, x, y) {
-  G.L = L; const P = G.P; P.x = x; P.y = y; P.kx = P.ky = 0;
+  G.L = L; const P = G.P; P.x = x; P.y = y; P.kx = P.ky = 0; P.vx = P.vy = 0;
   FLOW.t = 0; FLOW.ptx = -9999;
   G.parts = []; G.dialog = null; G.curTown = 0;
   snapCam();
@@ -350,6 +369,7 @@ function update(dt) {
   let w = 0; for (let i = 0; i < L.ents.length; i++) if (!L.ents[i].dead) L.ents[w++] = L.ents[i]; L.ents.length = w;
   if (L.kind === 'over') overworldSpawns(dt);
   if (L.spawner) L.spawner(L, dt);
+  for (const p of G.pops) p.t += dt; if (G.pops.length) G.pops = G.pops.filter(p => p.t < POP_LIFE);
   for (const p of G.parts) { p.x += p.vx * dt; p.y += p.vy * dt; const k = Math.exp(-dt * 5); p.vx *= k; p.vy *= k; p.life -= dt; }
   G.parts = G.parts.filter(p => p.life > 0);
   if (G.toasts.length) { G.toasts[0].t += dt; if (G.toasts[0].t >= G.toasts[0].dur) G.toasts.shift(); }
@@ -359,10 +379,10 @@ function update(dt) {
   if (G.dialog) {
     const d = G.dialog, before = Math.floor(d.shown); d.shown = Math.min(d.text.length, d.shown + dt * 48);
     if (Math.floor(d.shown) !== before && Math.floor(d.shown) % 3 === 0) sfx('talk');
-    if (d.npc && dist(d.npc.x, d.npc.y, P.x, P.y) > 48) G.dialog = null;
+    if (d.npc && wdist(G.L, d.npc.x, d.npc.y, P.x, P.y) > 48) G.dialog = null;
   }
   G.use = frozen ? null : findUse();
-  if (IN.usePress && G.use) G.use.act();
+  if (IN.usePress && G.use) { noteUse(G.use.label); G.use.act(); }
   const ptx = Math.floor(P.x / TS), pty = Math.floor(P.y / TS);
   const fogT = L.fog ? L.fog[pty * L.w + ptx] / 255 : 0; G.fogCur = (G.fogCur || 0) + (fogT - (G.fogCur || 0)) * Math.min(1, dt * 1.2);
   revealAround(L, ptx, pty, L.kind === 'over' ? 11 : L.revealR || 5);
@@ -370,21 +390,30 @@ function update(dt) {
   if (L.tick) L.tick(L, dt);
   auUpdate(dt, audioEnv());
   G.saveT += dt; if (G.saveT > 15) { G.saveT = 0; saveGame(); }
-  IN.atkPress = IN.usePress = IN.pulsePress = IN.switchPress = IN.reloadPress = IN.medPress = false;
+  tipsUpdate(dt);
+  IN.atkPress = IN.usePress = IN.switchPress = IN.reloadPress = IN.medPress = false;
 }
 function updatePlayer(dt, frozen) {
   const P = G.P, L = G.L;
   P.inv = Math.max(0, P.inv - dt);
   const mx = frozen ? 0 : IN.mx, my = frozen ? 0 : IN.my, mag = Math.hypot(mx, my);
   const tid = L.get(Math.floor(P.x / TS), Math.floor(P.y / TS));
-  const sp = 76 * TP[tid].speed * (P.fireCool > 0 ? 0.85 : 1);
-  moveBody(P, (mx * sp + P.kx) * dt, (my * sp + P.ky) * dt, L, false);
+  const sp = WALK * TP[tid].speed * (P.fireCool > 0 ? 0.85 : 1);
+  // velocity eases toward the stick: full speed in about 0.1 s, a short glide to a stop
+  const a = 1 - Math.exp(-dt * (mag > 0.05 ? 26 : 15));
+  P.vx += (mx * sp - P.vx) * a; P.vy += (my * sp - P.vy) * a;
+  const ox = P.x, oy = P.y, wx = P.vx * dt, wy = P.vy * dt;
+  moveBody(P, wx + P.kx * dt, wy + P.ky * dt, L, false);
+  // pushing into a wall: bleed off that speed so turning away doesn't feel sticky
+  if (Math.abs(wx) > 0.05 && Math.abs(P.x - ox) < Math.abs(wx) * 0.3) P.vx *= 0.4;
+  if (Math.abs(wy) > 0.05 && Math.abs(P.y - oy) < Math.abs(wy) * 0.3) P.vy *= 0.4;
   if (L.wrap) { const ox = P.x, oy = P.y; wrapPos(L, P); G.cam.x += P.x - ox; G.cam.y += P.y - oy; }
   const kd = Math.exp(-dt * 12); P.kx *= kd; P.ky *= kd;
-  P.moving = mag > 0.15;
+  const spd = Math.hypot(P.vx, P.vy);
+  P.moving = spd > 9;
   if (P.moving) {
-    P.anim += dt * (5 + 6 * mag) * TP[tid].speed;
-    if (P.aimT <= 0) { P.fx = mx / mag; P.fy = my / mag; P.dir = Math.abs(mx) > Math.abs(my) ? (mx < 0 ? 2 : 3) : (my < 0 ? 1 : 0); }
+    P.anim += dt * (5 + 6 * Math.min(1, spd / WALK)) * TP[tid].speed;
+    if (P.aimT <= 0 && mag > 0.05) { P.fx = mx / mag; P.fy = my / mag; P.dir = Math.abs(mx) > Math.abs(my) ? (mx < 0 ? 2 : 3) : (my < 0 ? 1 : 0); }
     if (TP[tid].water && Math.random() < dt * 10) G.parts.push({ x: P.x + (Math.random() - 0.5) * 8, y: P.y + 4, vx: 0, vy: 0, life: 0.4, max: 0.4, col: [190, 220, 250], sz: 1 });
   }
   updateGun(P, L, dt, frozen);
@@ -422,11 +451,11 @@ function updEnemy(e, dt, L, P) {
   if (e.mouth) e.mouth = Math.max(0, e.mouth - dt);
 }
 function updNPC(n, dt, L, P) {
-  const dp = dist(n.x, n.y, P.x, P.y); if (dp > TS * 40) return;
+  const dp = wdist(L, n.x, n.y, P.x, P.y); if (dp > TS * 40) return;
   if (n.entranced) { updEntranced(n, dt, L); return; }
   n.anim += dt;
   if (dp < 30) {
-    n.moving = false; const dx = P.x - n.x, dy = P.y - n.y;
+    n.moving = false; const dx = wdx(L, P.x - n.x), dy = wdy(L, P.y - n.y);
     n.dir = Math.abs(dx) > Math.abs(dy) ? (dx < 0 ? 2 : 3) : (dy < 0 ? 1 : 0); return;
   }
   n.wt -= dt;
@@ -443,17 +472,19 @@ function updNPC(n, dt, L, P) {
 function updProj(p, dt, L, P) {
   p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt;
   if (p.life <= 0 || L.solid(Math.floor(p.x / TS), Math.floor(p.y / TS))) { p.dead = true; burst(p.x, p.y, [180, 206, 76], 4, 0.5); return; }
-  if (dist(p.x, p.y, P.x, P.y) < P.r + p.r) { p.dead = true; hurtPlayer(p.dmg, p.x - p.vx, p.y - p.vy); }
+  if (wdist(L, p.x, p.y, P.x, P.y) < P.r + p.r) { p.dead = true; hurtPlayer(p.dmg, p.x - p.vx, p.y - p.vy); }
 }
 function updPickup(e, dt, P) {
   e.t += dt;
   if (e.t > 30) { e.dead = true; return; }
-  if (dist(e.x, e.y, P.x, P.y) < P.r + 7) {
+  if (wdist(G.L, e.x, e.y, P.x, P.y) < P.r + 7) {
+    // already full: leave it lying there for later instead of wasting it
+    if ((e.kind === 'heart' && P.hp >= P.maxHp) || (e.kind === 'med' && P.meds >= 5)) return;
     e.dead = true;
-    if (e.kind === 'heart') { P.hp = Math.min(P.maxHp, P.hp + 2); sfx('pickup'); }
+    if (e.kind === 'heart') { P.hp = Math.min(P.maxHp, P.hp + 2); sfx('pickup'); pop('+1 heart', '#ff8a8a'); }
     else if (e.kind === 'hcont') { P.vessels = (P.vessels || 0) + 1; P.maxHp = Math.min(24, DIFF.hearts + 2 * P.vessels); P.hp = P.maxHp; sfx('upgrade'); toast('Heart vessel', 'Your heart beats a little stronger.'); saveGame(); }
-    else if (e.kind === 'ammo') { giveAmmo(P, e.ammoType, e.n); sfx('pickup'); G.parts.push({ x: e.x, y: e.y - 6, vx: 0, vy: -18, life: 0.9, max: 0.9, col: [255, 220, 120], sz: 2 }); }
-    else if (e.kind === 'med') { P.meds = Math.min(5, P.meds + 1); sfx('pickup'); }
+    else if (e.kind === 'ammo') { giveAmmo(P, e.ammoType, e.n); sfx('pickup'); popAll([ammoPop(e.ammoType, e.n)]); }
+    else if (e.kind === 'med') { giveMed(P); sfx('pickup'); popAll([MED_POP]); }
     burst(e.x, e.y, [240, 80, 100], 6);
   }
 }
@@ -543,7 +574,7 @@ function findUse() {
     if (t === T.IMAT && L.goUp) return { label: 'Leave', act: () => L.goUp(L) };
   }
   let best = null, bd = 26;
-  for (const e of L.ents) if (L.wrap && Math.abs(wdx(L, e.x - P.x)) > 40) continue; else if ((e.type === 'npc' && !e.entranced) || (e.type === 'chest' && !e.open) || (e.type === 'corpse' && !e.searched && !G.prog.searched[e.key])) { const d = dist(e.x, e.y, P.x, P.y); if (d < bd) { bd = d; best = e; } }
+  for (const e of L.ents) if (L.wrap && Math.abs(wdx(L, e.x - P.x)) > 40) continue; else if ((e.type === 'npc' && !e.entranced) || (e.type === 'chest' && !e.open) || (e.type === 'corpse' && !e.searched && !G.prog.searched[e.key])) { const d = wdist(L, e.x, e.y, P.x, P.y); if (d < bd) { bd = d; best = e; } }
   if (best) {
     if (best.type === 'corpse') return { label: 'Search', act: () => startSearch(best) };
     if (best.type === 'npc') return { label: best.role === 'healer' ? 'Heal' : 'Talk', act: () => talkTo(best) };
@@ -562,27 +593,54 @@ function talkTo(n) {
   if (n.role === 'healer') {
     text = pick(Math.random, LINES_HEALER);
     if (G.P.hp < G.P.maxHp) { G.P.hp = G.P.maxHp; sfx('heal'); burst(G.P.x, G.P.y, [255, 230, 140], 12); }
-  } else text = stairsHint(n) || npcLine(n);
+  } else text = fallHint(n) || stairsHint(n) || npcLine(n);
+  n.talked = true;
   G.dialog = { name: n.name, text, shown: 0, npc: n };
 }
 function advanceDialog() { const d = G.dialog; if (!d) return; if (d.shown < d.text.length) d.shown = d.text.length; else G.dialog = null; }
 function openChest(c) { c.open = true; if (c.onOpen) c.onOpen(c); }
+// a short line of text that floats up from your head (what you picked up)
+export function pop(text, col = '#ffe9b0', delay = 0) { G.pops.push({ text, col, t: -delay }); }
+function drawPops() {
+  const P = G.P, rc = G.rc; if (!rc || !G.pops.length) return;
+  const k = SCALE / DPR, x = (P.x - rc.cx) * k, y0 = (P.y - rc.cy - 16) * k;
+  ctx.save(); ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(10,4,8,0.85)'; ctx.lineJoin = 'round';
+  for (const p of G.pops) {
+    if (p.t < 0) continue;
+    const y = y0 - p.t * 36 * UI.s - 6 * UI.s, a = clamp(Math.min(p.t / 0.15, (POP_LIFE - p.t) / 0.5), 0, 1);
+    ctx.globalAlpha = a; ctx.font = `600 ${Math.round(13 * UI.s)}px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+    ctx.strokeText(p.text, x, y); ctx.fillStyle = p.col; ctx.fillText(p.text, x, y);
+  }
+  ctx.restore();
+}
+const POP_LIFE = 1.9;
 export function toast(title, sub, dur = 3.4) { if (G.toasts.some(t => t.title === title)) return; G.toasts.push({ title, sub, t: 0, dur }); if (G.toasts.length > 3) G.toasts.splice(1, 1); }
 
 // ================= render =================
+const LOOK = { x: 0, y: 0 };
 function snapCam() {
-  const L = G.L, P = G.P;
+  const P = G.P; LOOK.x = LOOK.y = 0;
   G.cam.x = P.x - BW / 2; G.cam.y = P.y - BH / 2 - 8; clampCam();
 }
+// Levels bigger than the screen are never clamped: the camera keeps you centred even in a corner,
+// so the HUD never sits on top of you. Rooms smaller than the screen stay centred as before.
 function clampCam() {
   const L = G.L, ww = L.w * TS, wh = L.h * TS; if (L.wrap) return;
-  G.cam.x = ww > BW ? clamp(G.cam.x, 0, ww - BW) : (ww - BW) / 2;
-  G.cam.y = wh > BH ? clamp(G.cam.y, 0, wh - BH) : (wh - BH) / 2;
+  if (ww <= BW) G.cam.x = (ww - BW) / 2;
+  if (wh <= BH) G.cam.y = (wh - BH) / 2;
 }
-function render() {
+// follows you smoothly at any frame rate, leaning a little the way you are walking
+function updateCam(dt) {
+  const P = G.P;
+  // net lead once settled is about 25 px sideways and 17 px up/down (the follow lag eats the rest)
+  const la = 1 - Math.exp(-dt * 3);
+  LOOK.x += (clamp(P.vx * 0.45, -40, 40) - LOOK.x) * la; LOOK.y += (clamp(P.vy * 0.36, -30, 30) - LOOK.y) * la;
+  const k = 1 - Math.exp(-dt * 7);
+  G.cam.x += (P.x + LOOK.x - BW / 2 - G.cam.x) * k; G.cam.y += (P.y + LOOK.y - BH / 2 - 8 - G.cam.y) * k; clampCam();
+}
+function render(dt) {
   const L = G.L, P = G.P;
-  const k = 1 - Math.exp(-1 / 60 * 9);
-  G.cam.x += (P.x - BW / 2 - G.cam.x) * k; G.cam.y += (P.y - BH / 2 - 8 - G.cam.y) * k; clampCam();
+  updateCam(dt);
   let cx = G.cam.x + G.kick.x, cy = G.cam.y + G.kick.y;
   if (G.shake > 0) { cx += (Math.random() - 0.5) * G.shake * 16; cy += (Math.random() - 0.5) * G.shake * 16; }
   cx = Math.round(cx); cy = Math.round(cy); G.rc = { cx, cy };
@@ -595,6 +653,7 @@ function render() {
   bctx.globalAlpha = 1;
   drawLighting(L, cx, cy);
   drawFog(L, cx, cy);
+  drawGlints(L, cx, cy);
   if (L.kind === 'over') drawRedEyes(L, cx, cy);
   drawAim(P, L, cx, cy); drawReticle(P, cx, cy);
   if (G.testMark && L === G.over) drawTestMark(L, cx, cy);
@@ -608,6 +667,45 @@ function render() {
   if (G.mapOpen) drawMapOverlay();
   if (G.fade) drawFade();
 }
+// ---- glints: a small twinkle on things you can use, only when you're close ----
+const GLINT_R = 5.5; // tiles
+function houseWorthVisiting(h) {
+  if (houseOccupied(h)) return false;
+  const HL = G.levels.get('h:' + h.key); if (!HL) return true; // never been inside
+  for (const st of HL.stashes.values()) if (stashSearchable(st)) return true;
+  return HL.ents.some(e => e.type === 'corpse' && !e.searched && !G.prog.searched[e.key]);
+}
+function glint(x, y, d, ph, cx, cy) {
+  const a = clamp((GLINT_R - d) / 2, 0, 1); if (a <= 0) return;
+  const tw = 0.5 + 0.5 * Math.sin(G.t * 3.2 + ph), big = tw > 0.55;
+  const X = Math.round(x - cx), Y = Math.round(y - cy + Math.sin(G.t * 2 + ph) * 0.8);
+  bctx.fillStyle = `rgba(255,236,190,${a * (0.35 + 0.45 * tw)})`;
+  bctx.fillRect(X - (big ? 2 : 1), Y, big ? 5 : 3, 1); bctx.fillRect(X, Y - (big ? 2 : 1), 1, big ? 5 : 3);
+  bctx.fillStyle = `rgba(255,255,240,${a * (0.6 + 0.4 * tw)})`; bctx.fillRect(X, Y, 1, 1);
+}
+function drawGlints(L, cx, cy) {
+  if (G.fade || G.P.dead) return;
+  const P = G.P, ptx = Math.floor(P.x / TS), pty = Math.floor(P.y / TS), R = Math.ceil(GLINT_R);
+  for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) {
+    const tx = ptx + dx, ty = pty + dy, t = L.get(tx, ty);
+    let show = false, oy = 3;
+    if (t === T.DUNGEON || (t === T.STAIRS_DOWN && L.goDown)) show = true;
+    else if ((t === T.DOOR || t === T.CDOOR) && L.doorMap) { const h = L.doorMap.get(L.wx(tx) + ',' + L.wy(ty)); show = !!h && houseWorthVisiting(h); oy = 1; }
+    else if (t === T.ISHELF && L.stashes) { const st = L.stashes.get(tx + ',' + ty); show = !!st && stashSearchable(st); oy = 6; }
+    if (!show) continue;
+    const wx = tx * TS + 8, wy = ty * TS + oy;
+    glint(wx, wy, Math.hypot(wx - P.x, wy - P.y) / TS, tx * 1.7 + ty * 2.3, cx, cy);
+  }
+  for (const e of L.ents) {
+    let up;
+    if (e.type === 'corpse' && !e.searched && !G.prog.searched[e.key]) up = 7;
+    else if (e.type === 'chest' && !e.open) up = 12;
+    else if (e.type === 'npc' && !e.entranced && (!e.talked || (e.role === 'healer' && P.hp < P.maxHp))) up = 19;
+    else continue;
+    const x = nearX(L, e.x, P.x), y = nearY(L, e.y, P.y);
+    glint(x + 3, y - up, Math.hypot(x - P.x, y - P.y) / TS, e.x * 0.37 + e.y * 0.11, cx, cy);
+  }
+}
 // the spot a world test flagged: a pulsing ring you can walk to
 function drawTestMark(L, cx, cy) {
   const m = G.testMark, x = nearX(L, m.x * TS + 8, G.P.x) - cx, y = nearY(L, m.y * TS + 8, G.P.y) - cy, r = 14 + 5 * Math.sin(G.t * 5);
@@ -616,13 +714,14 @@ function drawTestMark(L, cx, cy) {
   bctx.beginPath(); bctx.moveTo(x - 4, y); bctx.lineTo(x + 4, y); bctx.moveTo(x, y - 4); bctx.lineTo(x, y + 4); bctx.stroke();
 }
 function drawTiles(L, cx, cy) {
-  const wr = !!L.wrap;
-  const x0 = wr ? Math.floor(cx / TS) : Math.max(0, Math.floor(cx / TS)), y0 = wr ? Math.floor(cy / TS) : Math.max(0, Math.floor(cy / TS));
-  const x1 = wr ? Math.floor((cx + BW) / TS) : Math.min(L.w - 1, Math.floor((cx + BW) / TS)), y1 = wr ? Math.floor((cy + BH) / TS) : Math.min(L.h - 1, Math.floor((cy + BH) / TS));
+  const wr = !!L.wrap, ed = !!L.edgeAt; // edgeAt: a level that draws scenery past its edges instead of black
+  const x0 = wr || ed ? Math.floor(cx / TS) : Math.max(0, Math.floor(cx / TS)), y0 = wr || ed ? Math.floor(cy / TS) : Math.max(0, Math.floor(cy / TS));
+  const x1 = wr || ed ? Math.floor((cx + BW) / TS) : Math.min(L.w - 1, Math.floor((cx + BW) / TS)), y1 = wr || ed ? Math.floor((cy + BH) / TS) : Math.min(L.h - 1, Math.floor((cy + BH) / TS));
   const env = beatEnv(), at = L.atlas, W = L.w;
   bctx.fillStyle = 'rgba(0,0,0,0.28)';
   for (let y = y0; y <= y1; y++) {
     for (let x = x0; x <= x1; x++) {
+      if (ed && !wr && !L.inb(x, y)) { const id = L.edgeAt(x, y); bctx.drawImage(at, ((hash2(x, y, 7) * 4) | 0) * FR * TS, id * TS, TS, TS, x * TS - cx, y * TS - cy, TS, TS); continue; }
       const i = wr ? L.idx(x, y) : y * W + x, id = L.t[i], p = TP[id]; let f = 0;
       if (p.anim === 1) f = Math.floor(G.t * 2.2 + ((x * 7 + y * 13) & 3) * 0.5) & 3;
       else if (p.anim === 2 && !G.prog.won) { const ph = Math.sin(G.t * 1.6 - (x * 0.45 + y * 0.3)); f = clamp(Math.floor((ph * 0.22 + 0.25 + env * 0.65) * 4), 0, 3); }
@@ -732,12 +831,16 @@ function drawFog(L, cx, cy) {
 function drawLighting(L, cx, cy) {
   let dark = 0, tint = [6, 8, 24];
   if (L.kind === 'over') dark = nightF() * DIFF.night;
-  else if (L.kind === 'maze') { dark = 0.92; tint = mixc([0, 0, 2], [34, 0, 8], L.alive); }
+  else if (L.kind === 'maze') {
+    dark = 0.92; tint = mixc([0, 0, 2], [34, 0, 8], L.alive);
+    // the outer works: open sky near the stairs, the same day or night as up top, fading to torchlight as the stone closes in
+    if (L.hard) { const g = hardAt(L, G.P.x, G.P.y); dark = lerp(nightF() * DIFF.night, dark, g); tint = mixc([6, 8, 24], tint, g); }
+  }
   else if (L.kind === 'flesh') { dark = G.prog.won ? 0.6 : 0.72; tint = [40, 0, 10]; }
   else if (L.kind === 'house') { dark = 0.3 + 0.55 * nightRaw() + (L.house.town.fog ? 0.15 : 0); tint = [8, 6, 10]; }
   if (dark < 0.01) return;
   const P = G.P, lights = [];
-  const pr = (L.kind === 'over' ? 84 : L.lightR || 64) * DIFF.light + (P.pulse > 0 ? Math.sin((1.2 - P.pulse) / 1.2 * Math.PI) * 150 : 0);
+  const pr = (L.kind === 'over' ? 84 : L.hard ? lerp(84, L.lightR, hardAt(L, G.P.x, G.P.y)) : L.lightR || 64) * DIFF.light;
   if (!P.dead) lights.push({ x: P.x, y: P.y - 4, r: pr });
   if (G.flash > 0 && G.flashAt) lights.push({ x: G.flashAt[0], y: G.flashAt[1], r: 70, col: [255, 214, 140] });
   const mx = cx + BW / 2, my = cy + BH / 2;
@@ -826,12 +929,9 @@ function drawHUD() {
     const kx = STICK.ox + (l ? dx / l * m : 0), ky = STICK.oy + (l ? dy / l * m : 0);
     ctx.beginPath(); ctx.arc(kx, ky, UI.stickR * 0.42, 0, TAU); ctx.fillStyle = 'rgba(255,255,255,0.32)'; ctx.fill();
     ctx.globalAlpha = 1;
-  } else if (G.hintT > 0) {
-    ctx.globalAlpha = clamp(G.hintT / 3, 0, 0.6);
-    ctx.beginPath(); ctx.arc(UI.stickHome.x, UI.stickHome.y, UI.stickR, 0, TAU); ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 2; ctx.stroke();
-    txt('drag to move', UI.stickHome.x, UI.stickHome.y, 12 * s, '#fff', 'center', 'middle');
-    ctx.globalAlpha = 1;
   }
+  drawTip();
+  drawPops();
   // dialog
   if (G.dialog) {
     const land = SW > SH * 1.2;
@@ -1013,10 +1113,10 @@ function applySave(s, L) {
 
 // ================= menus =================
 export const $ = id => document.getElementById(id);
-function hideAll() { for (const id of ['title', 'menu', 'loading', 'ending', 'files', 'intro', 'guide', 'tests']) $(id).classList.add('hidden'); }
+function hideAll() { for (const id of ['title', 'menu', 'loading', 'ending', 'files', 'intro', 'guide', 'tests', 'howto']) $(id).classList.add('hidden'); }
 function showLoading(msg) { hideAll(); $('loadingMsg').textContent = msg; $('loading').classList.remove('hidden'); }
 function openMenu() {
-  if (!G.running) return; G.paused = true; IN.atkHeld = false; STICK = null; PTR.clear();
+  if (!G.running) return; G.paused = true; resetInput(); retireTip('help');
   $('menuSeed').textContent = 'World seed ' + G.seed;
   $('btnDiff').textContent = DIFF.perma ? 'Difficulty: Impossible (locked)' : 'Difficulty: ' + DIFF.name; $('btnDiff').disabled = DIFF.perma;
   $('btnFiles').textContent = `Files (${Object.keys(G.prog.files || {}).length}/${FILES.length})`;
@@ -1029,7 +1129,9 @@ function showEnding() {
   G.paused = true; IN.atkHeld = false; STICK = null; PTR.clear();
   const st = G.stats; G.endMode = 'win';
   $('endTitle').textContent = 'The world goes still.'; $('endSub').textContent = 'No pulse in the ground. No warmth in the walls. For the first time, the world is only a world.';
-  $('endStats').innerHTML = `Time ${fmtTime(st.time)}<br>Things killed ${st.kills}<br>Times you fell ${st.deaths}<br>Mode ${DIFF.name}` + (G.ngp ? `<br>New Game+ ${G.ngp}` : '');
+  const sp = st.splits || {}, n = floorsN();
+  const legs = Object.keys(sp).map(Number).sort((a, b) => a - b).map(d => `${d > n ? 'Inside' : stageInfo(d).title.replace(/^The /, '').replace(/\s+·.*$/, '') + (stageInfo(d).s === 'cells' && n > 3 ? ' ' + (d - 1) : '')} ${fmtTime(sp[d])}`);
+  $('endStats').innerHTML = `Time ${fmtTime(st.time)}` + (legs.length ? `<br><small>${legs.join(' · ')}</small>` : '') + `<br>Things killed ${st.kills}<br>Times you fell ${st.deaths}<br>Mode ${DIFF.name}` + (G.ngp ? `<br>New Game+ ${G.ngp}` : '');
   $('btnNGP').textContent = `Begin again (New Game+ ${(G.ngp || 0) + 1})`; $('btnStay').textContent = 'Stay a while';
   $('ending').classList.remove('hidden');
 }
@@ -1072,7 +1174,9 @@ function setupMenus() {
   $('btnFiles').onclick = () => openFiles();
   $('btnFilesBack').onclick = () => { if (!$('fileView').classList.contains('hidden')) { $('fileView').classList.add('hidden'); $('fileList').classList.remove('hidden'); } else { $('files').classList.add('hidden'); $('menu').classList.remove('hidden'); } };
   $('btnGuide').onclick = () => { $('guide').classList.add('hidden'); G.paused = false; };
-  $('btnHelp').onclick = () => showHelp();
+  $('btnHelp').onclick = () => showHowTo('menu');
+  $('btnHowtoTitle').onclick = () => showHowTo('title');
+  $('btnHowtoBack').onclick = () => closeHowTo();
   $('btnIntro').onclick = () => { $('intro').classList.add('hidden'); G.paused = false; toast('Find the old stairs', 'Red marks on your map. Search houses for guns and ammo.', 4.5); };
   $('btnNGP').onclick = () => {
     const P = G.P; G.running = false; $('ending').classList.add('hidden');
@@ -1110,13 +1214,16 @@ function frame(now) {
   requestAnimationFrame(frame);
   let dt = (now - LAST) / 1000; LAST = now; if (dt > 0.05) dt = 0.05; if (dt < 0) dt = 0;
   if (!G.running) return;
-  if (!G.paused) update(dt);
-  render();
+  // any menu, note or guide opening drops whatever was held, so nothing is stuck when play resumes
+  if (G.paused && !WAS_PAUSED) resetInput(); WAS_PAUSED = G.paused;
+  if (!G.paused && !G.mapOpen) update(dt); // the map is a safe moment: everything waits
+  render(dt);
 }
+let WAS_PAUSED = false;
 function boot() {
   resize(); buildSprites(); setupMenus();
   window.addEventListener('resize', resize);
-  document.addEventListener('visibilitychange', () => { if (document.hidden) { saveGame(); if (G.running && !G.paused) openMenu(); } });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) { resetInput(); saveGame(); if (G.running && !G.paused) openMenu(); } });
   requestAnimationFrame(frame);
 }
 window.BTS = { G, IN, newGame, saveGame, T, TP };

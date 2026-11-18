@@ -49,7 +49,6 @@ export function sfx(name) {
     case 'ascend': tone(110, 0.9, 'sine', 0.22, 3); break;
     case 'talk': tone(420 + Math.random() * 90, 0.04, 'square', 0.04); break;
     case 'heal': [392, 494, 587].forEach((f, i) => tone(f, 0.3, 'sine', 0.12, 1, i * 0.1)); break;
-    case 'pulse': tone(150, 0.7, 'sine', 0.25, 3); noiseHit(0.5, 900, 0.12); break;
     case 'squelch': noiseHit(0.22, 480, 0.25, 0, 'lowpass'); tone(90, 0.2, 'sine', 0.2, 0.6); break;
     case 'spit': noiseHit(0.12, 1500, 0.16); tone(300, 0.1, 'sine', 0.08, 0.5); break;
     case 'chirp': { const f = 2200 + Math.random() * 900; tone(f, 0.07, 'sine', 0.035, 1.3); tone(f * 1.1, 0.06, 'sine', 0.03, 0.8, 0.1); break; }

@@ -3,7 +3,7 @@ import { DIFF, floorsN } from './difficulty.js';
 import { SPR, SPRC, SPRW } from './art.js';
 import { makeEnemy, moveBody } from './entities.js';
 import { DX4, DY4 } from './gen_overworld.js';
-import { drawEyes, getLevel, mazeOver, reachDepth } from './gen_maze.js';
+import { drawEyes, getLevel, mazeOver, reachDepth, stageInfo } from './gen_maze.js';
 import { fleshNudges, showFleshGuide } from './guide.js';
 import { sfx } from './audio.js';
 import { giveFile } from './weapons.js';
@@ -278,12 +278,12 @@ function heartDies(h) {
 export function enterFlesh(from) {
   G.fleshFrom = from.eid;
   transition('Inside the Shift', 'You are inside it now. Everything here is alive.', () => {
-    const F = getLevel('flesh'); enterLevel(F, F.start.x, F.start.y); reachDepth(4);
+    const F = getLevel('flesh'); enterLevel(F, F.start.x, F.start.y); reachDepth(floorsN() + 1);
     if (!F.introduced && !G.prog.won) { F.introduced = true; setTimeout(showFleshGuide, 900); }
   }, 2.4);
 }
 function fleshUp(L) {
   sfx('ascend');
   const eid = G.fleshFrom ?? (G.dungeon ? G.dungeon.id : 0);
-  const fl = floorsN(); transition(`Floor ${fl}`, 'Back into the stone. It flinches as you pass.', () => { const M = getLevel(`m${eid}-${fl}`); enterLevel(M, M.downAt.x, M.downAt.y); });
+  const fl = floorsN(); transition(stageInfo(fl).title, 'Back into the stone. It flinches as you pass.', () => { const M = getLevel(`m${eid}-${fl}`); enterLevel(M, M.downAt.x, M.downAt.y); });
 }

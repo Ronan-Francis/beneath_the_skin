@@ -1,6 +1,6 @@
 # Beneath the Skin
 
-*Something lives beneath the world. They call it the Shift.*
+*Something beneath the world is hunting you, and turning it into a prison.*
 
 **▶ Play it: https://ronan-francis.github.io/beneath_the_skin/**
 
@@ -19,6 +19,7 @@ Every world is generated from a seed: a wrapping island of hex regions with town
 - **Synthesized sound.** Every effect and the heartbeat are generated live with Web Audio. There are no sound files.
 - **Plays offline.** After one visit, the game works with no connection.
 - **Installable.** Add it to your phone's home screen and it opens full screen, like an app.
+- **Easy to pick up.** One-time tips appear next to each control the first time you need it, things you can use sparkle when you're close, and *How to play* (title screen or pause menu) covers the rest.
 - **Built-in world tests.** *World tests* on the title screen generates 50 worlds and checks that every one is playable.
 
 ## Controls
@@ -34,7 +35,7 @@ Every world is generated from a seed: a wrapping island of hex regions with town
 | Map | Map button | M |
 | Pause | Pause button | Esc or P |
 
-On a phone, hold it sideways. In Chrome, use ⋮ → **Add to Home screen** to play full screen.
+Opening the map pauses the game. On a phone, hold it sideways. In Chrome, use ⋮ → **Add to Home screen** to play full screen.
 
 ## Running it on your computer
 
@@ -46,7 +47,7 @@ python -m http.server 8000
 
 Then open http://localhost:8000. There's no build step and nothing to install.
 
-The offline service worker is switched off on `localhost`, so your edits always show up straight away. To test offline mode locally, open http://localhost:8000/?sw.
+On `localhost` the game always loads fresh copies of every file and the offline service worker is switched off, so your edits show up on a normal reload without touching `VERSION`. To test it exactly like the live site, offline mode included, open http://localhost:8000/?sw.
 
 ## Publishing an update
 
@@ -75,10 +76,11 @@ js/
   gen_flesh.js          the final level inside the Shift
   gen_house.js          house interiors
   shift.js              the Shift hunting you on the surface at night
-  guide.js              telling the player what to do next
+  guide.js              telling the player what to do next, and the How to play page
   worldchecks.js        world validation, auto-fixes and the World tests page
   audio.js              synthesized sound effects and heartbeat
-  weapons.js            guns, ammo, files, searching houses and bodies
+  weapons.js            guns, ammo, files, searching houses and bodies, pick-up pop-ups
+  tips.js               one-time tips that point at a control the first time it matters
   game.js               canvas, input, game state, update loop, rendering, HUD, saves, menus
 ```
 
@@ -96,4 +98,4 @@ Lighting, fog and the HUD are drawn in `js/game.js` (`drawLighting`, `drawFog`, 
 
 ## Saves
 
-Progress is saved in the browser's local storage under keys starting with `beneath_the_skin`. Saves belong to the site they were made on, so a save from `localhost` doesn't carry over to the GitHub Pages version. *Clear all saves* on the title screen wipes them.
+Progress, and which tips you've already seen, are saved in the browser's local storage under keys starting with `beneath_the_skin`. Saves belong to the site they were made on, so a save from `localhost` doesn't carry over to the GitHub Pages version. *Clear all saves* on the title screen wipes them.

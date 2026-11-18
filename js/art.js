@@ -254,6 +254,21 @@ PAINT[T.VEINS] = (P, c) => {
   veinsOn(P, c, 2 + (c.v & 1), [132, 26, 46], 0.3);
   if (c.v === 2) { P.set(10, 6, [206, 90, 100]); P.set(11, 6, [176, 60, 76]); }
 };
+// prison stone: pale cut blocks pushed up through the grass, a rusted bar stub in some
+PAINT[T.PSTONE] = (P, c) => {
+  grassFill(P, c, mixc(C.grass, [120, 110, 90], 0.3), mixc(C.grassD, [96, 86, 70], 0.3), C.grassL);
+  const blocks = [[0, 0, 8, 7], [8, 0, 8, 7], [0, 8, 6, 8], [6, 8, 10, 8]];
+  blocks.forEach(([bx, by, bw, bh], k) => {
+    if ((c.v + k) % 4 === 3) return; // one block missing: grass shows through
+    const base = shd([196, 188, 170], 0.9 + c.r() * 0.16);
+    for (let y = by + 1; y < by + bh; y++) for (let x = bx + 1; x < bx + bw; x++) {
+      const edge = y === by + 1 ? 1.1 : (y === by + bh - 1 || x === bx + bw - 1) ? 0.7 : 1;
+      P.set(x, y, shd(base, edge * (0.94 + c.r() * 0.1)));
+    }
+    if (c.r() < 0.5) { const cx = bx + 2 + Math.floor(c.r() * (bw - 3)); for (let y = by + 2; y < by + bh - 1; y += 2) P.set(cx, y, shd(base, 0.62)); } // a crack
+  });
+  if (c.v === 1) for (let y = 3; y <= 12; y++) { P.set(11, y, y < 5 ? [150, 72, 40] : [92, 56, 44]); P.set(12, y, [62, 38, 32]); } // a broken bar
+};
 PAINT[T.CWALL] = (P, c) => cwallFill(P, c, c.v < 3);
 PAINT[T.CDOOR] = (P, c) => {
   cwallFill(P, c, false);
@@ -467,7 +482,7 @@ export function buildAtlas(alive, seed) {
   }
   avg[T.ROAD] = [196, 160, 110]; avg[T.BRIDGE_H] = avg[T.BRIDGE_V] = [176, 124, 72];
   avg[T.DUNGEON] = [230, 40, 60]; avg[T.STAIRS_DOWN] = [240, 60, 70]; avg[T.STAIRS_UP] = [230, 220, 170];
-  avg[T.TREE] = [40, 88, 44]; avg[T.PINE] = [36, 80, 60];
+  avg[T.TREE] = [40, 88, 44]; avg[T.PINE] = [36, 80, 60]; avg[T.PSTONE] = [206, 196, 176];
   cv.avg = avg;
   return cv;
 }

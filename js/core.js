@@ -58,8 +58,9 @@ export const T = {
   MFLOOR: 30, MWALL: 31, MEYE: 32, STAIRS_UP: 33, STAIRS_DOWN: 34, MBONES: 35, MROOT: 36,
   FFLOOR: 40, FWALL: 41, FBILE: 42, FTEETH: 43, FVEIN: 44, FMOUTH: 45, FEYE: 46,
   IFLOOR: 48, IWALL: 49, IRUG: 50, ITABLE: 51, IBED: 52, ISHELF: 53, IFIRE: 54, IMAT: 55,
+  PSTONE: 56, // prison stone the stairs drag up behind them on the surface
 };
-export const NT = 56;
+export const NT = 57;
 export const TP = [];
 for (let i = 0; i < NT; i++) TP.push({ solid: false, speed: 1, anim: 0, hurt: 0, water: false, ground: false, wall: false });
 function tp(id, o) { Object.assign(TP[id], o); }
@@ -84,7 +85,6 @@ tp(T.WALL, { solid: true, wall: true });
 tp(T.DOOR, { solid: true, wall: true });
 tp(T.WELL, { solid: true });
 tp(T.LAMP, { solid: true });
-tp(T.DUNGEON, {});
 tp(T.CWALL, { solid: true, wall: true });
 tp(T.CDOOR, { solid: true, wall: true });
 tp(T.BARRICADE, { solid: true });
@@ -93,6 +93,8 @@ tp(T.MOOR, { ground: true });
 tp(T.SIGN, { solid: true });
 tp(T.SWAMP, { speed: 0.6, anim: 1 });
 tp(T.VEINS, { anim: 2, ground: true });
+tp(T.PSTONE, { speed: 1.1 });
+tp(T.DUNGEON, { anim: 2 }); // the stairs breathe with the heartbeat
 tp(T.MFLOOR, {});
 tp(T.MWALL, { solid: true, wall: true, anim: 2 });
 tp(T.MEYE, { solid: true, wall: true, anim: 2 });

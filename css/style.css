@@ -1,10 +1,13 @@
   html, body { margin: 0; height: 100%; background: #0b0507; overflow: hidden; overscroll-behavior: none; }
   body { font-family: "Pixelify Sans", ui-monospace, monospace; color: #f2e6dc; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
   #game { position: fixed; inset: 0; width: 100vw; height: 100vh; height: 100dvh; display: block; touch-action: none; image-rendering: pixelated; }
-  .overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 24px; box-sizing: border-box; text-align: center; z-index: 5; }
+  .overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 24px; box-sizing: border-box; text-align: center; z-index: 5; overflow-y: auto; }
+  /* centre when it fits, scroll from the top when it doesn't (sideways phones) */
+  .overlay { justify-content: safe center; overflow-x: hidden; scrollbar-width: thin; }
+  .overlay > * { flex-shrink: 0; }
   .hidden { display: none !important; }
   #title { background: radial-gradient(ellipse at 50% 60%, #3a0a12 0%, #160509 55%, #070304 100%); }
-  #title::before { content: ""; position: absolute; inset: 0; background: radial-gradient(circle at 50% 62%, rgba(200, 20, 40, .35), transparent 45%); animation: beat 1.05s infinite; pointer-events: none; }
+  #title::before { content: ""; position: fixed; inset: 0; background: radial-gradient(circle at 50% 62%, rgba(200, 20, 40, .35), transparent 45%); animation: beat 1.05s infinite; pointer-events: none; }
   @keyframes beat { 0%, 100% { opacity: .35; transform: scale(1); } 12% { opacity: .9; transform: scale(1.04); } 26% { opacity: .5; } 36% { opacity: .8; transform: scale(1.02); } }
   h1 { position: relative; margin: 0; font-weight: 600; font-size: clamp(40px, 12vw, 76px); line-height: .92; letter-spacing: 2px; color: #f6e2d4; text-shadow: 0 3px 0 #5a0c18, 0 0 26px rgba(220, 40, 60, .45); }
   .sub { position: relative; margin: 0 0 6px; max-width: 30ch; color: #cdb4a8; font-size: 16px; line-height: 1.35; }
@@ -21,8 +24,8 @@
   .hint { position: relative; margin-top: 8px; font-size: 13px; line-height: 1.5; color: #8f7a72; max-width: 34ch; }
   #menu, #loading { background: rgba(8, 3, 5, .86); }
   #guide { background: rgba(20, 2, 6, .9); }
-  #files, #intro { background: rgba(6, 5, 6, .95); justify-content: flex-start; padding-top: 40px; overflow-y: auto; }
-  #intro { justify-content: center; }
+  #files, #intro, #howto { background: rgba(6, 5, 6, .95); justify-content: flex-start; padding-top: 40px; overflow-y: auto; }
+  #intro { justify-content: safe center; }
   .filehead { font-family: ui-monospace, "Courier New", monospace; letter-spacing: 3px; color: #c9b8a8; font-size: 15px; }
   .filelist { display: flex; flex-direction: column; gap: 8px; width: min(92vw, 520px); }
   .filebtn { font-family: ui-monospace, "Courier New", monospace; font-size: 14px; text-align: left; min-width: 0; width: 100%; padding: 11px 14px; background: #161012; border-color: #6a4a44; }
@@ -57,3 +60,28 @@
   #wtFails { display: flex; flex-direction: column; gap: 8px; }
   .wtbtns { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; flex: none; }
   @keyframes pulse { 50% { opacity: .45; } }
+  #howto { padding-bottom: 28px; }
+  .howto { flex: none; }
+  .howto h3 { font-size: 13px; letter-spacing: 1px; text-transform: uppercase; margin: 16px 0 6px; color: #6a1a24; }
+  .howto h3:first-child { margin-top: 0; }
+  .howto .now { background: #f6efe2; border-left: 4px solid #8a1a28; padding: 8px 10px; margin: 0 0 4px; font-size: 14px; }
+  .ctl { width: 100%; border-collapse: collapse; font-size: 14px; line-height: 1.35; }
+  .ctl th { text-align: left; font-size: 12px; color: #6a4a3a; font-weight: 700; padding: 0 6px 4px 0; }
+  .ctl td { padding: 4px 6px 4px 0; border-top: 1px solid #cfc4b2; vertical-align: top; }
+  .ctl td:first-child { font-weight: 700; white-space: nowrap; }
+  .howto ul { margin: 0 0 4px; padding-left: 18px; font-size: 14px; line-height: 1.5; }
+  .howto li { margin-bottom: 4px; }
+  /* short screens (phones held sideways): tighter spacing so menus fit without scrolling */
+  @media (max-height: 560px) {
+    .overlay { gap: 8px; padding: 12px 16px; }
+    h1 { font-size: clamp(30px, 10vh, 52px); }
+    .sub { font-size: 14px; margin: 0; }
+    button { font-size: 16px; padding: 8px 18px; }
+    .diffrow button { font-size: 14px; padding: 6px 10px; }
+    .blurb { min-height: 0; }
+    .hint { display: none; }
+    #menu { flex-direction: row; flex-wrap: wrap; align-content: safe center; padding-inline: max(16px, calc((100vw - 560px) / 2)); }
+    #menu h2, #menuSeed { width: 100%; }
+    #menu h2 { font-size: 22px; }
+    #menu button { width: 240px; }
+  }

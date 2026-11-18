@@ -3,7 +3,7 @@ import { DIFF, floorsN } from './difficulty.js';
 import { rgb } from './art.js';
 import { sfx } from './audio.js';
 import {
-  bctx, burst, damageEnemy, G, IN, nearX, nearY, saveGame, toast, wdx, wdy, wrapPos
+  bctx, burst, damageEnemy, G, IN, nearX, nearY, pop, saveGame, toast, wdx, wdy, wrapPos
 } from './game.js';
 
 // ================= guns =================
@@ -229,30 +229,36 @@ export function searchStash(st) {
   G.prog.houses[st.key] = G.dayN;
   if (first) {
     const gunP = town.fog ? 0.2 : town.kind === 'city' ? 0.13 : town.kind === 'village' ? 0.08 : 0.07;
-    if (R() < gunP) { const id = nextGun(P, town.kind === 'city' || town.fog); if (id) { giveGun(P, id); found.push('a ' + GUNS[id].name.toLowerCase()); } }
-    if (R() < 0.6) { const t = ammoTypeFor(P), n = ammoAmt(t, town.fog ? 1.2 : 0.8); giveAmmo(P, t, n); found.push(`${n} ${AMMO_NAME[t]}`); }
-    if (R() < 0.16) { P.meds = Math.min(5, P.meds + 1); found.push('a medkit'); }
-    if (R() < 0.1 && giveFile('surface')) found.push('a file');
+    if (R() < gunP) { const id = nextGun(P, town.kind === 'city' || town.fog); if (id) { giveGun(P, id); found.push(gunPop(id)); } }
+    if (R() < 0.6) { const t = ammoTypeFor(P), n = ammoAmt(t, town.fog ? 1.2 : 0.8); giveAmmo(P, t, n); found.push(ammoPop(t, n)); }
+    if (R() < 0.16 && giveMed(P)) found.push(MED_POP);
+    if (R() < 0.1 && giveFile('surface')) found.push(FILE_POP);
   } else {
-    if (R() < 0.5) { const t = ammoTypeFor(P), n = ammoAmt(t, 0.5); giveAmmo(P, t, n); found.push(`${n} ${AMMO_NAME[t]}`); }
-    if (R() < 0.1) { P.meds = Math.min(5, P.meds + 1); found.push('a medkit'); }
+    if (R() < 0.5) { const t = ammoTypeFor(P), n = ammoAmt(t, 0.5); giveAmmo(P, t, n); found.push(ammoPop(t, n)); }
+    if (R() < 0.1 && giveMed(P)) found.push(MED_POP);
   }
-  if (found.length) { sfx('pickup'); toast('Searched the cupboard', 'Found ' + listText(found) + '.', 3); }
+  if (found.length) { sfx('pickup'); popAll(found); }
   else toast('Nothing', pick(R, ['Empty drawers. Someone got here first.', 'Just dust, and a smell of iron.', 'Nothing useful. The floor is warm.', 'A cold dinner, half eaten. Nobody home.']), 2.8);
   saveGame();
 }
 function searchCorpse(c) {
   const P = G.P, found = []; c.searched = true; G.prog.searched[c.key] = 1;
   const k = c.pool === 'surface' ? 1 : c.pool === 'flesh' ? 2 : 1.5;
-  if (c.pool === 'surface' && !P.guns.some(g => g.id === 'shotgun') && Math.random() < 0.3) { giveGun(P, 'shotgun'); found.push('a shotgun'); }
+  if (c.pool === 'surface' && !P.guns.some(g => g.id === 'shotgun') && Math.random() < 0.3) { giveGun(P, 'shotgun'); found.push(gunPop('shotgun')); }
   const t = c.pool === 'surface' ? (Math.random() < 0.5 ? 'shell' : 'heavy') : ammoTypeFor(P), n = ammoAmt(t, k);
-  giveAmmo(P, t, n); found.push(`${n} ${AMMO_NAME[t]}`);
-  if (c.pool !== 'surface' || Math.random() < 0.5) { P.meds = Math.min(5, P.meds + 1); found.push('a medkit'); }
+  giveAmmo(P, t, n); found.push(ammoPop(t, n));
+  if ((c.pool !== 'surface' || Math.random() < 0.5) && giveMed(P)) found.push(MED_POP);
   let gotFile = giveFile(c.pool);
   // shorter descents on easier modes: the deepest hunter carries the pages of the floors you skip
   if (c.pool.startsWith('maze') && +c.pool.slice(4) >= floorsN()) for (let k = 1; k <= 3; k++) gotFile = giveFile('maze' + k) || gotFile;
-  if (gotFile) found.push('a file');
-  sfx('pickup'); toast(c.pool === 'surface' ? 'A quarantine warden' : 'A hunter, long dead', 'Found ' + listText(found) + '.', 3.4);
+  if (gotFile) found.push(FILE_POP);
+  sfx('pickup'); popAll([[c.pool === 'surface' ? 'A quarantine warden' : 'A hunter, long dead', '#c8b8ac'], ...found]);
   saveGame();
 }
+// ---- pop-ups: what you just picked up, floating over your head ----
+export const MED_POP = ['+1 medkit', '#ff8a8a'], FILE_POP = ['+1 file (pause menu to read)', '#b8d0ff'];
+export function ammoPop(t, n) { return [`+${n} ${AMMO_NAME[t]}`, '#ffe29a']; }
+export function gunPop(id) { return ['New gun: ' + GUNS[id].name, '#ffffff']; }
+export function popAll(list) { list.forEach(([text, col], i) => pop(text, col, i * 0.55)); }
+export function giveMed(P) { if (P.meds >= 5) return false; P.meds++; return true; }
 export function listText(a) { return a.length < 2 ? a.join('') : a.slice(0, -1).join(', ') + ' and ' + a[a.length - 1]; }
