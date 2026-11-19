@@ -6,7 +6,6 @@ import { DX4, DY4 } from './gen_overworld.js';
 import { drawEyes, getLevel, mazeOver, reachDepth, stageInfo } from './gen_maze.js';
 import { fleshNudges, showFleshGuide } from './guide.js';
 import { sfx } from './audio.js';
-import { giveFile } from './weapons.js';
 import {
   bctx, beatEnv, BH, burst, BW, ctx, drawShadow, drawSpr, enterLevel, G, hurtPlayer, makeCorpse,
   saveGame, SH, SW, toast, transition, txt, UI
@@ -272,7 +271,7 @@ function heartDies(h) {
   const L = G.L; G.prog.won = true; G.stillT = 0; G.endT = 6;
   sfx('roar'); G.shake = 1.6; burst(h.x, h.y, [210, 30, 50], 70, 2.6);
   for (const e of L.ents) if (e.type === 'enemy' || e.type === 'proj') { e.dead = true; burst(e.x, e.y, [200, 40, 60], 6); }
-  toast('The Shift\'s heart stops', 'Listen.', 5); giveFile('end');
+  toast('The Shift\'s heart stops', 'Listen.', 5);
   saveGame();
 }
 export function enterFlesh(from) {

@@ -1,5 +1,5 @@
 import { dist, pick, TAU, TS } from './core.js';
-import { DIFF, floorsN } from './difficulty.js';
+import { DIFF } from './difficulty.js';
 import { rgb } from './art.js';
 import { sfx } from './audio.js';
 import {
@@ -191,29 +191,6 @@ function useMed(P) {
   P.meds--; P.hp = Math.min(P.maxHp, P.hp + 4); sfx('heal'); burst(P.x, P.y, [255, 255, 255], 8);
 }
 
-// ================= classified files =================
-export const FILES = [
-  { pool: 'surface', title: 'Notice to residents', body: 'By order of the ██████ council this settlement is closed.\n\nDo not drink from the wells. Do not sleep on bare ground. If the floor of your house is warm, leave the house.\n\nThe fog is not weather. It is the Shift breathing out.' },
-  { pool: 'surface', title: 'Warden\'s log, day 4', body: 'Fog rose at dusk from the old stairs north of the village. ██ of my men went down to look. They came back up eleven hours later and could not tell us their names.\n\nWe burned their clothes. The clothes bled.\n\nThe old ones here call what lives down there the Shift. I have stopped telling them to hush.' },
-  { pool: 'surface', title: 'Survey note, hill country', body: 'Ground temperature 37°C at one metre. Constant, day and night.\n\nSamples from the deep bore came up as ██████ tissue. Not rock.\n\nThe island is not resting on stone. It is resting on something alive and very large. Locals say it moves in its sleep. They call it the Shift.' },
-  { pool: 'surface', title: 'Letter, never sent', body: 'Mam,\n\nDon\'t come for the harvest. The cows won\'t go into the low field. Last night Seán said he heard a heartbeat under the kitchen floor. I laughed at him.\n\nTonight I can hear it too.' },
-  { pool: 'surface', title: 'Parish register, margin', body: 'Burials suspended.\n\nThe graves won\'t stay shut. The ground takes them down and some mornings it gives them back.\n\nWhat it gives back is not ours anymore.' },
-  { pool: 'maze1', title: 'Hunter\'s journal, 1', body: 'First stair found. The mortar sweats.\n\nMy lamp gutters like the air is being breathed in around me. I am not the first down here. There are bones, and the bones are clean.' },
-  { pool: 'maze2', title: 'Hunter\'s journal, 2', body: 'The walls are warm and they flinch when I fire near them. The bullet holes close over.\n\nThe Shift isn\'t under the island. We are inside it, and it is under everything.' },
-  { pool: 'maze3', title: 'Hunter\'s journal, 3', body: 'It knows I\'m here. The eyes in the walls follow me.\n\nSomewhere below there is a sound like a fist on a door, sixty times a minute. It gets faster when I get closer.' },
-  { pool: 'flesh', title: 'Anatomy, drawn in blood', body: 'Four knots of nerve, one in each quarter of the body. They feed the membrane round the heart.\n\nCut them and the Shift can\'t shield itself.\n\nCut them and it will feel every one.' },
-  { pool: 'flesh', title: 'Last entry', body: 'The white ones come when it hurts. Don\'t stay where you bled. Keep moving and they lose your scent.\n\nI bled. I\'m writing this sitting down.' },
-  { pool: 'flesh', title: 'Note pinned with a knife', body: 'If you\'re reading this you got further than ██ of us.\n\nIts heart beats faster when it\'s afraid. So does mine.\n\nMake it count.' },
-  { pool: 'end', title: 'Unsigned', body: 'The ground is cold this morning. Only cold. The wells run clear.\n\nSomewhere under every island there is another one sleeping. ████████████.\n\nRest, hunter. Then go and find it.' },
-];
-export function giveFile(pool) {
-  const i = FILES.findIndex((f, k) => f.pool === pool && !G.prog.files[k]);
-  if (i < 0) return false;
-  G.prog.files[i] = 1; sfx('upgrade');
-  setTimeout(() => toast('File recovered', `"${FILES[i].title}". Read it from the pause menu.`, 4), 900);
-  return true;
-}
-
 // ================= searching houses and bodies =================
 export function startSearch(target) { G.search = { target, t: 0, dur: target.type === 'corpse' ? 0.9 : 1.2 }; sfx('rummage'); }
 export function updateSearch(dt) {
@@ -232,7 +209,6 @@ export function searchStash(st) {
     if (R() < gunP) { const id = nextGun(P, town.kind === 'city' || town.fog); if (id) { giveGun(P, id); found.push(gunPop(id)); } }
     if (R() < 0.6) { const t = ammoTypeFor(P), n = ammoAmt(t, town.fog ? 1.2 : 0.8); giveAmmo(P, t, n); found.push(ammoPop(t, n)); }
     if (R() < 0.16 && giveMed(P)) found.push(MED_POP);
-    if (R() < 0.1 && giveFile('surface')) found.push(FILE_POP);
   } else {
     if (R() < 0.5) { const t = ammoTypeFor(P), n = ammoAmt(t, 0.5); giveAmmo(P, t, n); found.push(ammoPop(t, n)); }
     if (R() < 0.1 && giveMed(P)) found.push(MED_POP);
@@ -248,15 +224,11 @@ function searchCorpse(c) {
   const t = c.pool === 'surface' ? (Math.random() < 0.5 ? 'shell' : 'heavy') : ammoTypeFor(P), n = ammoAmt(t, k);
   giveAmmo(P, t, n); found.push(ammoPop(t, n));
   if ((c.pool !== 'surface' || Math.random() < 0.5) && giveMed(P)) found.push(MED_POP);
-  let gotFile = giveFile(c.pool);
-  // shorter descents on easier modes: the deepest hunter carries the pages of the floors you skip
-  if (c.pool.startsWith('maze') && +c.pool.slice(4) >= floorsN()) for (let k = 1; k <= 3; k++) gotFile = giveFile('maze' + k) || gotFile;
-  if (gotFile) found.push(FILE_POP);
   sfx('pickup'); popAll([[c.pool === 'surface' ? 'A quarantine warden' : 'A hunter, long dead', '#c8b8ac'], ...found]);
   saveGame();
 }
 // ---- pop-ups: what you just picked up, floating over your head ----
-export const MED_POP = ['+1 medkit', '#ff8a8a'], FILE_POP = ['+1 file (pause menu to read)', '#b8d0ff'];
+export const MED_POP = ['+1 medkit', '#ff8a8a'];
 export function ammoPop(t, n) { return [`+${n} ${AMMO_NAME[t]}`, '#ffe29a']; }
 export function gunPop(id) { return ['New gun: ' + GUNS[id].name, '#ffffff']; }
 export function popAll(list) { list.forEach(([text, col], i) => pop(text, col, i * 0.55)); }

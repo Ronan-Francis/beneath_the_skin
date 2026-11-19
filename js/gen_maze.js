@@ -10,8 +10,8 @@ import {
   ammoAmt, ammoPop, ammoTypeFor, giveAmmo, giveGun, giveMed, gunPop, GUNS, MED_POP, nextGun, popAll
 } from './weapons.js';
 import {
-  bctx, beatEnv, BH, burst, BW, ctx, enterLevel, G, initMap, makeCorpse, paintSeen, saveGame, toast,
-  transition
+  bctx, beatEnv, BH, burst, BW, ctx, DPR, enterLevel, G, initMap, makeCorpse, paintSeen, saveGame, SCALE, toast,
+  transition, txt, UI
 } from './game.js';
 
 // ================= the descent: the prison under the world =================
@@ -20,7 +20,7 @@ import {
 export const stageOf = (d, n = floorsN()) => d <= 1 ? 'gradient' : d >= n ? 'breach' : 'cells';
 export function stageInfo(d, n = floorsN()) {
   const s = stageOf(d, n);
-  if (s === 'gradient') return { s, alive: 0.08, title: 'The Outer Works', sub: 'Old walls in the grass. Further in, they close over.', light: 92, cells: 11, pool: ['husk', 'husk', 'mite'], count: 4, hp: 1, braid: 0.12, rooms: 1 };
+  if (s === 'gradient') return { s, alive: 0.08, title: 'The Outer Works', sub: 'The roof fell in here, long ago. Further in, it holds.', light: 92, cells: 11, pool: ['husk', 'husk', 'mite'], count: 4, hp: 1, braid: 0.12, rooms: 1 };
   if (s === 'breach') return { s, alive: 0.85, title: 'The Breach', sub: 'Something has grown through the stone.', light: 74, cells: 11, pool: ['worm', 'husk', 'mite', 'worm', 'antibody'], count: 7, hp: 1.6, braid: 0.1, rooms: 2, polyps: true };
   const nC = n - 2, k = d - 2; // which floor of cells, from 0
   return { s, alive: nC > 1 ? 0.3 + 0.25 * k / (nC - 1) : 0.4, title: nC > 1 ? `The Cells  ·  Level ${k + 1}` : 'The Cells',
@@ -144,7 +144,8 @@ export function genMaze(seed, depth, eid, nFloors = floorsN()) {
   L.spT = 10;
   L.spawner = fi.s === 'breach' ? (L, dt) => { mazeSpawner(L, dt); breachTick(L, dt); } : mazeSpawner;
   L.goDown = mazeDown; L.goUp = mazeUp; L.audio = mazeAudio;
-  L.drawUnder = drawEyes; L.drawOver = fi.s === 'breach' ? (L, cx, cy) => { drawBreach(L, cx, cy); mazeOver(L, cx, cy); } : mazeOver; L.markers = mazeMarkers;
+  placeScrawls(L);
+  L.drawUnder = (L, cx, cy) => { drawEyes(L, cx, cy); drawScratches(L, cx, cy); }; L.drawText = drawScrawlText; L.drawOver = fi.s === 'breach' ? (L, cx, cy) => { drawBreach(L, cx, cy); mazeOver(L, cx, cy); } : mazeOver; L.markers = mazeMarkers;
   return L;
 }
 
@@ -158,19 +159,28 @@ function hardenFromSurface(L, R, seed, sx, sy, far) {
     const t = L.t[i], u = R(), soft = 1 - g;
     if (soft < 0.03) continue;
     if (t === T.MWALL || t === T.MEYE) {
-      if (x === 0 || y === 0 || x === S - 1 || y === S - 1) { if (u < soft) L.t[i] = R() < 0.5 ? T.TREE : T.PINE; continue; }
-      if (x % 3 === 0 && y % 3 === 0 && u < soft * 0.5) { L.t[i] = R() < 0.5 ? T.TREE : T.PINE; continue; } // the old posts
-      if (u < soft * 0.62) L.t[i] = R() < 0.15 ? T.FLOWERS : T.GRASS;
-      else if (u < soft * 0.8) L.t[i] = R() < 0.6 ? T.TREE : T.PINE;
-      else if (u < soft * 0.9) L.t[i] = R() < 0.85 ? T.BARRICADE : T.SIGN; // the prison's outer fence and its warnings
+      // a sunken yard where the roof fell in: rock and earth around the rim, never trees
+      if (x === 0 || y === 0 || x === S - 1 || y === S - 1) { if (u < soft) L.t[i] = T.MOUNTAIN; continue; }
+      if (x % 3 === 0 && y % 3 === 0) continue; // the old posts still stand
+      if (u < soft * 0.6) L.t[i] = R() < 0.15 ? T.FLOWERS : T.GRASS;
+      else if (u < soft * 0.78) L.t[i] = T.MOUNTAIN; // fallen roof: boulders and rubble
+      else if (u < soft * 0.88) L.t[i] = R() < 0.85 ? T.BARRICADE : T.SIGN; // the prison's old barricades and its warnings
       // anything else stays: prison stone standing in the grass
     } else if (t === T.MFLOOR || t === T.MROOT || t === T.MBONES) {
       if (u < soft * 1.15) L.t[i] = u < soft * 0.15 ? T.FLOWERS : T.GRASS;
     }
   }
   L.eyes = L.eyes.filter(e => L.t[e.y * S + e.x] === T.MEYE);
-  // past the edge: forest out by the entrance, solid prison stone further in
-  L.edgeAt = (x, y) => L.hard[clamp(y, 0, S - 1) * S + clamp(x, 0, S - 1)] < 0.45 + hash2(x, y, seed) * 0.2 ? (hash2(x, y, seed + 1) < 0.5 ? T.TREE : T.PINE) : T.MWALL;
+  // where the roof fell in: a few pools of sky on the grass, none right on the stairs
+  const holes = [];
+  for (let tries = 0; tries < 400 && holes.length < 5; tries++) {
+    const x = 1 + Math.floor(R() * (S - 2)), y = 1 + Math.floor(R() * (S - 2)), i = y * S + x;
+    if (L.hard[i] > 0.45 || (L.t[i] !== T.GRASS && L.t[i] !== T.FLOWERS) || holes.some(h => Math.hypot(h[0] - x, h[1] - y) < 6)) continue;
+    holes.push([x, y]); const r0 = 40 + R() * 16;
+    L.lights.push({ x: x * TS + 8, y: y * TS + 8, r: r0, r0, col: [255, 232, 180], sky: true });
+  }
+  // past the edge: the rock the yard was dug into near the entrance, solid prison stone further in
+  L.edgeAt = (x, y) => L.hard[clamp(y, 0, S - 1) * S + clamp(x, 0, S - 1)] < 0.45 + hash2(x, y, seed) * 0.2 ? T.MOUNTAIN : T.MWALL;
 }
 // how far into the prison a spot is: 0 out under the sky, 1 deep in the stone
 export function hardAt(L, x, y) {
@@ -284,6 +294,63 @@ function drawBreach(L, cx, cy) {
   }
 }
 
+// ================= scrawls: a few lines scratched into the walls by the people who were here =================
+// Short, in order down the descent, so together they trace the prison failing. No menu: you read them as you pass.
+const SCRAWLS = {
+  gradient: ['KEEP OUT. BY ORDER OF THE WARDEN.', 'NOBODY GOES DOWN AFTER DARK', 'Count the bars every morning.'],
+  cells0: ['Day 41. It sang through the wall.', 'Cell 9 is warm. Leave it empty.', 'They moved my cell. I never left it.'],
+  cells1: ['It is not sleeping. It is listening.', 'The guards stopped coming down.', 'My door is open. I stay anyway.'],
+  breach: ['WE BUILT THIS TO HOLD IT', 'It grew in through the mortar.', 'It let us build this.'],
+};
+const SCRAWL_SEE = TS * 4;
+function scrawlLines(L) { return L.stage === 'cells' ? SCRAWLS[L.depth === 2 ? 'cells0' : 'cells1'] : SCRAWLS[L.stage] || []; }
+// wall faces you can see (a wall with open floor just below it), spread along the way from the up stairs to the down stairs
+function placeScrawls(L) {
+  const S = L.w, lines = scrawlLines(L); L.scrawls = []; if (!lines.length) return;
+  const D = bfs(L, L.upI), E = bfs(L, L.downI), total = D[L.downI]; if (total <= 0) return;
+  const fracs = L.stage === 'gradient' ? [0.42, 0.62, 0.84] : [0.22, 0.52, 0.8], slack = L.stage === 'gradient' ? 10 : 2;
+  const okWall = i => {
+    const x = i % S, y = (i / S) | 0, t = L.t[i];
+    if (x < 1 || y < 1 || x >= S - 1 || y >= S - 1 || (t !== T.MWALL && t !== T.FWALL)) return false;
+    if (L.stage === 'breach' && (x % 3 === 0) !== (y % 3 === 0)) return false; // gaps can move: only write on posts and solid stone
+    if (L.hard && L.hard[i] < 0.2) return false;
+    return !L.scrawls.some(s => Math.abs(s.x - x) + Math.abs(s.y - y) < 8);
+  };
+  lines.forEach((text, k) => {
+    const want = total * fracs[k]; let best = -1, bd = 1e9;
+    for (let i = S; i < S * S; i++) {
+      if (D[i] < 0 || E[i] < 0 || D[i] + E[i] > total + slack) continue; // on (or close beside) the main route
+      const w = i - S; if (!okWall(w)) continue;
+      const d = Math.abs(D[i] - want); if (d < bd) { bd = d; best = w; }
+    }
+    if (best < 0) for (let i = S; i < S * S; i++) { // nothing beside the route: any wall face you can walk up to, about that far in
+      if (D[i] < 0 || !WALK_T(L.t[i])) continue; const w = i - S; if (!okWall(w)) continue;
+      const d = Math.abs(D[i] - want); if (d < bd) { bd = d; best = w; }
+    }
+    if (best >= 0) L.scrawls.push({ x: best % S, y: (best / S) | 0, text, a: 0 });
+  });
+}
+// scratch marks on the stone, always there to catch your eye
+function drawScratches(L, cx, cy) {
+  for (const s of L.scrawls || []) {
+    const x = s.x * TS - cx, y = s.y * TS - cy; if (x < -TS || y < -TS || x > BW || y > BH) continue;
+    bctx.fillStyle = 'rgba(232,220,196,0.55)';
+    for (let k = 0; k < 4; k++) bctx.fillRect(x + 3 + k * 3, y + 5 + (k & 1), 1, 6 - (k & 1));
+    bctx.fillRect(x + 2, y + 8, 12, 1);
+  }
+}
+// the words themselves, drawn crisp over the scaled-up picture when you're close
+export function drawScrawlText(L) {
+  if (!L.scrawls || !L.scrawls.length || !G.rc) return;
+  const P = G.P, k = SCALE / DPR;
+  for (const s of L.scrawls) {
+    const wx = s.x * TS + 8, wy = s.y * TS + 8, want = Math.hypot(P.x - wx, P.y - wy) < SCRAWL_SEE && L.seen[s.y * L.w + s.x] ? 1 : 0;
+    s.a += (want - s.a) * 0.06; if (s.a < 0.02) continue;
+    const sx = (wx - G.rc.cx) * k, sy = (s.y * TS - G.rc.cy) * k - 6 * UI.s;
+    ctx.globalAlpha = s.a; txt(s.text, sx, sy, 13 * UI.s, '#eadcc4', 'center', 'bottom'); ctx.globalAlpha = 1;
+  }
+}
+
 function openMazeChest(c) {
   G.prog.chests[c.key] = 1; sfx('pickup'); burst(c.x, c.y - 4, [255, 210, 120], 10);
   const P = G.P;
@@ -341,6 +408,14 @@ export function drawEyes(L, cx, cy) {
   }
 }
 export function mazeOver(L, cx, cy) {
+  // below ground the whole picture goes brown and dim, strongest out in the yard where the sky still shows
+  if (L.hard) {
+    const g = hardAt(L, G.P.x, G.P.y);
+    bctx.globalCompositeOperation = 'multiply'; bctx.fillStyle = `rgba(150,112,84,${0.55 * (1 - g * 0.5)})`; bctx.fillRect(0, 0, BW, BH);
+    bctx.globalCompositeOperation = 'source-over';
+    const vg = bctx.createRadialGradient(BW / 2, BH / 2, Math.min(BW, BH) * 0.25, BW / 2, BH / 2, Math.max(BW, BH) * 0.65);
+    vg.addColorStop(0, 'rgba(10,5,2,0)'); vg.addColorStop(1, 'rgba(10,5,2,0.6)'); bctx.fillStyle = vg; bctx.fillRect(0, 0, BW, BH);
+  }
   // eyes and enemies glint through the dark
   for (const e of L.eyes) {
     if (!e.open || e.open < 0.3) continue;

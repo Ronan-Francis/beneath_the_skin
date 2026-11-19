@@ -10,13 +10,13 @@ import { enterDungeon, getLevel, growSurfaceVeins, hardAt, stageInfo } from './g
 import { fleshAlarm } from './gen_flesh.js';
 import { enterHouse, houseOccupied, KNOCK_LINES } from './gen_house.js';
 import {
-  drawRedEyes, findHaven, makeFogTown, moveDungeon, nightRaw, shiftTick, updEntranced
+  drawRedEyes, findHaven, fixStairsReach, makeFogTown, moveDungeon, nightRaw, restoreDungeon, shiftTick, updEntranced
 } from './shift.js';
 import { closeHowTo, drawObjective, goalText, showHowTo } from './guide.js';
 import { makeWorld, setupWorldTests, townCentre } from './worldchecks.js';
 import { AU, auResume, auUpdate, sfx } from './audio.js';
 import {
-  AMMO_SHORT, ammoPop, ammoTypeFor, drawAim, drawBullet, drawGun, drawReticle, FILES, giveAmmo, gunOf, GUNS,
+  AMMO_SHORT, ammoPop, ammoTypeFor, drawAim, drawBullet, drawGun, drawReticle, giveAmmo, gunOf, GUNS,
   giveMed, isEmpty, MED_POP, popAll, searchStash, startSearch, stashSearchable, updateGun, updateSearch, updBullet
 } from './weapons.js';
 import { drawTip, noteUse, retireTip, tipsReset, tipsUpdate } from './tips.js';
@@ -142,7 +142,7 @@ const DAY_LEN = 300;
 // every run starts late in the afternoon: dusk in about ten seconds, night in about thirty, so the first town falls in the first two minutes
 const START_DAY = 0.7;
 export const G = {
-  ngp: 0, prog: { chests: {}, ganglia: {}, won: false, files: {}, houses: {}, searched: {}, doomed: {}, lost: {}, hints: {}, marked: {} }, diff: 'easy', permaDead: false, hintArrow: null, endMode: 'win', endT: 0, stillT: 0, kick: { x: 0, y: 0 }, flash: 0, dayN: 0, search: null, hittables: [],
+  ngp: 0, prog: { chests: {}, ganglia: {}, won: false, houses: {}, searched: {}, doomed: {}, lost: {}, hints: {}, marked: {} }, diff: 'easy', permaDead: false, hintArrow: null, endMode: 'win', endT: 0, stillT: 0, kick: { x: 0, y: 0 }, flash: 0, dayN: 0, search: null, hittables: [],
   running: false, paused: false, seed: 0, t: 0, day: 0.3, L: null, over: null, levels: new Map(), P: null,
   cam: { x: 0, y: 0 }, parts: [], toasts: [], shake: 0, mapOpen: false, dialog: null, dialogBox: { y: 0, h: 0 },
   fade: null, beat: 9, hurtFlash: 0, stats: { kills: 0, time: 0, deaths: 0 }, lastTown: -1, curTown: 0,
@@ -191,7 +191,7 @@ function revealAround(L, tx, ty, rad) {
 function refreshMap(L) { if (L.mapDirty) { L.mapCanvas.getContext('2d').putImageData(L.mapImg, 0, 0); L.mapDirty = false; } }
 
 // ================= world setup =================
-export function freshProg() { return { chests: {}, ganglia: {}, won: false, files: {}, houses: {}, searched: {}, doomed: {}, lost: {}, hints: {}, marked: {} }; }
+export function freshProg() { return { chests: {}, ganglia: {}, won: false, houses: {}, searched: {}, doomed: {}, lost: {}, hints: {}, marked: {} }; }
 // paints and map canvas: only for the world you actually play (the tests skip this)
 function dressOverworld(L) { L.atlas = buildAtlas(0, G.seed); initMap(L); }
 export function setupOverworld(L) {
@@ -663,6 +663,7 @@ function render(dt) {
   ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.imageSmoothingEnabled = false;
   ctx.drawImage(buf, 0, 0, BW * SCALE, BH * SCALE);
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  if (L.drawText) L.drawText(L);
   drawHUD();
   if (G.mapOpen) drawMapOverlay();
   if (G.fade) drawFade();
@@ -833,14 +834,19 @@ function drawLighting(L, cx, cy) {
   if (L.kind === 'over') dark = nightF() * DIFF.night;
   else if (L.kind === 'maze') {
     dark = 0.92; tint = mixc([0, 0, 2], [34, 0, 8], L.alive);
-    // the outer works: open sky near the stairs, the same day or night as up top, fading to torchlight as the stone closes in
-    if (L.hard) { const g = hardAt(L, G.P.x, G.P.y); dark = lerp(nightF() * DIFF.night, dark, g); tint = mixc([6, 8, 24], tint, g); }
+    // the outer works: you are below ground from the first step. Even by day the yard sits in heavy brown shade, lit
+    // by pools of sky where the roof fell in; deeper in, only your own light.
+    if (L.hard) {
+      const g = hardAt(L, G.P.x, G.P.y), nf = nightF();
+      dark = lerp(Math.max(0.76, nf * DIFF.night), dark, g); tint = mixc(mixc([26, 14, 4], [4, 6, 18], nf), tint, g);
+      for (const l of L.lights) if (l.sky) { l.r = l.r0 * (1 - 0.45 * nf); l.col = nf > 0.5 ? [150, 170, 230] : [255, 232, 180]; }
+    }
   }
   else if (L.kind === 'flesh') { dark = G.prog.won ? 0.6 : 0.72; tint = [40, 0, 10]; }
   else if (L.kind === 'house') { dark = 0.3 + 0.55 * nightRaw() + (L.house.town.fog ? 0.15 : 0); tint = [8, 6, 10]; }
   if (dark < 0.01) return;
   const P = G.P, lights = [];
-  const pr = (L.kind === 'over' ? 84 : L.hard ? lerp(84, L.lightR, hardAt(L, G.P.x, G.P.y)) : L.lightR || 64) * DIFF.light;
+  const pr = (L.kind === 'over' ? 84 : L.hard ? lerp(54, L.lightR, hardAt(L, G.P.x, G.P.y)) : L.lightR || 64) * DIFF.light;
   if (!P.dead) lights.push({ x: P.x, y: P.y - 4, r: pr });
   if (G.flash > 0 && G.flashAt) lights.push({ x: G.flashAt[0], y: G.flashAt[1], r: 70, col: [255, 214, 140] });
   const mx = cx + BW / 2, my = cy + BH / 2;
@@ -1084,7 +1090,7 @@ export function saveGame() {
     if (!G.running || !G.over || !G.P || G.permaDead || G.testWorld) return;
     const P = G.P, L = G.over;
     const data = { v: 1, seed: G.seed, hp: Math.max(1, P.hp), maxHp: P.maxHp, dmg: P.dmg, day: G.day, stats: G.stats, lastTown: G.lastTown, maxDepth: G.maxDepth,
-      loc: !P.dead && !G.fade && G.L && G.L.key ? { key: G.L.key, x: P.x, y: P.y } : null, seen: rle(L.seen), towns: L.towns.map(t => t.seen ? 1 : 0), dung: L.dungeons.map(d => ({ x: d.x, y: d.y, seen: d.seen ? 1 : 0 })), wasNight: !!G.wasNight, settings: G.settings, prog: G.prog || null, ngp: G.ngp || 0, diff: DIFF.id, vessels: P.vessels || 0, guns: P.guns, gi: P.gi, ammo: P.ammo, meds: P.meds, dayN: G.dayN, gen: GEN_V, wv: G.variant || 0 };
+      loc: !P.dead && !G.fade && G.L && G.L.key ? { key: G.L.key, x: P.x, y: P.y } : null, seen: rle(L.seen), towns: L.towns.map(t => t.seen ? 1 : 0), dung: L.dungeons.map(d => ({ x: d.x, y: d.y, seen: d.seen ? 1 : 0, trail: d.trail || [] })), wasNight: !!G.wasNight, settings: G.settings, prog: G.prog || null, ngp: G.ngp || 0, diff: DIFF.id, vessels: P.vessels || 0, guns: P.guns, gi: P.gi, ammo: P.ammo, meds: P.meds, dayN: G.dayN, gen: GEN_V, wv: G.variant || 0 };
     localStorage.setItem(SAVE_KEY, JSON.stringify(data));
   } catch (e) { }
 }
@@ -1104,8 +1110,9 @@ function applySave(s, L) {
   (s.towns || []).forEach((v, i) => { if (L.towns[i]) L.towns[i].seen = !!v; });
   (s.dung || []).forEach((v, i) => {
     const d = L.dungeons[i]; if (!d) return;
-    if (typeof v === 'object') { d.seen = !!v.seen; if (v.x !== d.x || v.y !== d.y) moveDungeon(L, d, v.x, v.y, false); } else d.seen = !!v;
+    if (typeof v === 'object') { d.seen = !!v.seen; restoreDungeon(L, d, v); } else d.seen = !!v;
   });
+  fixStairsReach(L);
   for (const k of Object.keys(G.prog.lost || {}).concat(Object.keys(G.prog.doomed || {}))) { const t = L.towns[+k]; if (t && !t.fog) makeFogTown(L, t); }
   computeFog(L);
   G.wasNight = !!s.wasNight;
@@ -1113,13 +1120,12 @@ function applySave(s, L) {
 
 // ================= menus =================
 export const $ = id => document.getElementById(id);
-function hideAll() { for (const id of ['title', 'menu', 'loading', 'ending', 'files', 'intro', 'guide', 'tests', 'howto']) $(id).classList.add('hidden'); }
+function hideAll() { for (const id of ['title', 'menu', 'loading', 'ending', 'intro', 'guide', 'tests', 'howto']) $(id).classList.add('hidden'); }
 function showLoading(msg) { hideAll(); $('loadingMsg').textContent = msg; $('loading').classList.remove('hidden'); }
 function openMenu() {
   if (!G.running) return; G.paused = true; resetInput(); retireTip('help');
   $('menuSeed').textContent = 'World seed ' + G.seed;
   $('btnDiff').textContent = DIFF.perma ? 'Difficulty: Impossible (locked)' : 'Difficulty: ' + DIFF.name; $('btnDiff').disabled = DIFF.perma;
-  $('btnFiles').textContent = `Files (${Object.keys(G.prog.files || {}).length}/${FILES.length})`;
   $('btnSound').textContent = 'Sound: ' + (AU.on ? 'on' : 'off');
   $('btnNewConfirm').textContent = 'New world';
   $('menu').classList.remove('hidden');
@@ -1134,18 +1140,6 @@ function showEnding() {
   $('endStats').innerHTML = `Time ${fmtTime(st.time)}` + (legs.length ? `<br><small>${legs.join(' · ')}</small>` : '') + `<br>Things killed ${st.kills}<br>Times you fell ${st.deaths}<br>Mode ${DIFF.name}` + (G.ngp ? `<br>New Game+ ${G.ngp}` : '');
   $('btnNGP').textContent = `Begin again (New Game+ ${(G.ngp || 0) + 1})`; $('btnStay').textContent = 'Stay a while';
   $('ending').classList.remove('hidden');
-}
-function openFiles() {
-  $('menu').classList.add('hidden'); $('files').classList.remove('hidden'); $('fileView').classList.add('hidden'); $('fileList').classList.remove('hidden');
-  const list = $('fileList'); list.innerHTML = '';
-  FILES.forEach((f, i) => {
-    const b = document.createElement('button'); b.className = 'filebtn';
-    const got = G.prog.files[i];
-    b.textContent = got ? `FILE ${String(i + 1).padStart(2, '0')}  ${f.title}` : `FILE ${String(i + 1).padStart(2, '0')}  ████████`;
-    b.disabled = !got;
-    b.onclick = () => { $('fileList').classList.add('hidden'); $('fileView').classList.remove('hidden'); $('fileTitle').textContent = `FILE ${String(i + 1).padStart(2, '0')} · ${f.title}`; $('fileBody').innerHTML = f.body.split('\n\n').map(p => '<p>' + p.replace(/(█+)/g, '<span class="redact">$1</span>') + '</p>').join(''); };
-    list.appendChild(b);
-  });
 }
 function showIntro() { G.paused = true; $('intro').classList.remove('hidden'); }
 function closeMenu() { G.paused = false; $('menu').classList.add('hidden'); }
@@ -1171,8 +1165,6 @@ function setupMenus() {
   $('btnNew').onclick = () => { auResume(); tryFullscreen(); const v = $('seed').value.trim(); const seed = v ? (/^\d+$/.test(v) ? +v : [...v].reduce((h, c) => Math.imul(h ^ c.charCodeAt(0), 16777619) >>> 0, 2166136261)) : randomSeed(); newGame(seed, null, null, G.pickDiff()); };
   $('btnCont').onclick = () => { auResume(); tryFullscreen(); const s = loadSave(); if (s) newGame(s.seed, s); };
   $('btnResume').onclick = () => closeMenu();
-  $('btnFiles').onclick = () => openFiles();
-  $('btnFilesBack').onclick = () => { if (!$('fileView').classList.contains('hidden')) { $('fileView').classList.add('hidden'); $('fileList').classList.remove('hidden'); } else { $('files').classList.add('hidden'); $('menu').classList.remove('hidden'); } };
   $('btnGuide').onclick = () => { $('guide').classList.add('hidden'); G.paused = false; };
   $('btnHelp').onclick = () => showHowTo('menu');
   $('btnHowtoTitle').onclick = () => showHowTo('title');

@@ -15,7 +15,7 @@ Every world is generated from a seed: a wrapping island of hex regions with town
 - **Procedural worlds.** Overworld, towns, houses, mazes and the flesh level are all built from one seed. Type a seed on the title screen to replay a world.
 - **Day and night.** The Shift stalks the surface after dark.
 - **Four difficulties:** Easy, Medium, Hard and Impossible.
-- **Scavenging.** Search empty houses and bodies for guns, ammo, medkits and recovered files.
+- **Scavenging.** Search empty houses and bodies for guns, ammo and medkits.
 - **Synthesized sound.** Every effect and the heartbeat are generated live with Web Audio. There are no sound files.
 - **Plays offline.** After one visit, the game works with no connection.
 - **Installable.** Add it to your phone's home screen and it opens full screen, like an app.
@@ -79,7 +79,7 @@ js/
   guide.js              telling the player what to do next, and the How to play page
   worldchecks.js        world validation, auto-fixes and the World tests page
   audio.js              synthesized sound effects and heartbeat
-  weapons.js            guns, ammo, files, searching houses and bodies, pick-up pop-ups
+  weapons.js            guns, ammo, searching houses and bodies, pick-up pop-ups
   tips.js               one-time tips that point at a control the first time it matters
   game.js               canvas, input, game state, update loop, rendering, HUD, saves, menus
 ```

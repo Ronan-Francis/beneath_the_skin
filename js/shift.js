@@ -95,10 +95,20 @@ function climbOut(L, d, dt) {
     return;
   }
 }
+const STONEABLE = t => isGround(t) || t === T.VEINS || t === T.PSTONE || t === T.TREE || t === T.PINE;
+function layStone(L, d, i) {
+  if (!STONEABLE(L.t[i])) return;
+  L.t[i] = T.PSTONE; const tr = d.trail || (d.trail = []);
+  if (tr[tr.length - 1] !== i && tr.length < 600) tr.push(i);
+  if (L.seen[i]) paintSeen(L, i);
+}
 export function moveDungeon(L, d, nx, ny, fx) {
-  const W = L.w, oi = d.y * W + d.x, ni = ny * W + nx;
-  // the stairs drag the old prison up behind them: cut stone where there was grass
-  L.t[oi] = (isGround(d.under) || d.under === T.VEINS || d.under === T.PSTONE || d.under === T.TREE || d.under === T.PINE) ? T.PSTONE : d.under;
+  const W = L.w, ox = d.x, oy = d.y, oi = oy * W + ox, ni = ny * W + nx;
+  // the stairs drag the old prison up behind them: cut stone where there was grass. That trail is always
+  // walkable, so you can always follow it back to the stairs (trees they flattened become stone too).
+  if (STONEABLE(d.under)) { L.t[oi] = d.under; layStone(L, d, oi); } else L.t[oi] = d.under;
+  // a diagonal step: open one of the corners too, so the trail never needs a squeeze between two trees
+  if (nx !== ox && ny !== oy) { const a = oy * W + (L.wrap ? L.wx(nx) : nx), b = (L.wrap ? L.wy(ny) : ny) * W + ox; if (TP[L.t[a]].solid && TP[L.t[b]].solid) layStone(L, d, STONEABLE(L.t[a]) ? a : b); }
   d.under = L.t[ni]; L.t[ni] = T.DUNGEON; d.x = nx; d.y = ny;
   d.light.x = nx * TS + 8; d.light.y = ny * TS + 8;
   for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
@@ -117,6 +127,46 @@ export function moveDungeon(L, d, nx, ny, fx) {
       if (!G.crawlWarned) { G.crawlWarned = true; toast('The stairs are moving', 'At night they crawl toward you. Step into their hex and they stop.', 5); }
     }
   }
+}
+// loading a save: lay the saved trail back down, put the stairs where they were, then make sure you can walk to them
+export function restoreDungeon(L, d, v) {
+  for (const i of v.trail || []) if (i >= 0 && i < L.t.length && STONEABLE(L.t[i])) { L.t[i] = T.PSTONE; (d.trail || (d.trail = [])).push(i); }
+  if (v.x !== d.x || v.y !== d.y) moveDungeon(L, d, v.x, v.y, false);
+}
+// Any stairs you can't walk to from the start town go back to where they first stood. If even that spot is cut off,
+// a stone path is laid from the stairs to the nearest ground you can reach. Returns how many stairs needed help.
+const BUILT = t => TP[t].wall && t !== T.MOUNTAIN && t !== T.SNOW; // never pave through houses or city walls
+export function fixStairsReach(L) {
+  const W = L.w, N = W * L.h;
+  const reach = () => {
+    const seen = new Uint8Array(N), q = new Int32Array(N); let qh = 0, qt = 0;
+    const s0 = Math.floor(L.spawn.y / TS) * W + Math.floor(L.spawn.x / TS); seen[s0] = 1; q[qt++] = s0;
+    while (qh < qt) {
+      const c = q[qh++], x = c % W, y = (c / W) | 0;
+      for (let k = 0; k < 4; k++) { const n = L.idx(x + DX4[k], y + DY4[k]); if (seen[n] || TP[L.t[n]].solid) continue; seen[n] = 1; q[qt++] = n; }
+    }
+    return seen;
+  };
+  let seen = reach(), fixed = 0;
+  for (const d of L.dungeons) {
+    if (seen[d.y * W + d.x]) continue;
+    fixed++; moveDungeon(L, d, d.home[0], d.home[1], false);
+    seen = reach(); if (seen[d.y * W + d.x]) continue;
+    // still cut off: search outward from the stairs to the nearest reachable tile, then pave the way back
+    const from = new Int32Array(N).fill(-1), q = new Int32Array(N); let qh = 0, qt = 0, hit = -1;
+    const si = d.y * W + d.x; from[si] = si; q[qt++] = si;
+    while (qh < qt && hit < 0) {
+      const c = q[qh++], x = c % W, y = (c / W) | 0;
+      for (let k = 0; k < 4; k++) { const n = L.idx(x + DX4[k], y + DY4[k]); if (from[n] >= 0 || BUILT(L.t[n])) continue; from[n] = c; if (seen[n]) { hit = n; break; } q[qt++] = n; }
+    }
+    for (let c = hit >= 0 ? from[hit] : si; c !== si; c = from[c]) {
+      const t = L.t[c]; if (!TP[t].solid) continue;
+      L.t[c] = t === T.DEEP ? T.SHALLOW : T.PSTONE; if (L.seen[c]) paintSeen(L, c);
+    }
+    seen = reach();
+  }
+  if (fixed) { computeFog(L); L.mapDirty = true; }
+  return fixed;
 }
 // towns bordering the stairs lose their people: they stop, their eyes go red, and one by one they walk down into the dark.
 // Nothing stops it. The first-night town waits until you're there to see it (or until the night is half gone).
